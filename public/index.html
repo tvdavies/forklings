@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Forklings</title>
+<meta name="description" content="A pocket pet for developers. Raise it, dress it, coach it, and it battles on its own.">
+<meta name="theme-color" content="#271d3b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:wght@400;600;700&family=Pixelify+Sans:wght@400..700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="top" id="top" hidden>
+  <a class="brand" href="#home">Forklings</a>
+  <div class="who"><span id="whoHandle"></span> <span class="badge" id="whoBadge"></span>
+    <button class="link" id="logoutBtn" type="button">Log out</button></div>
+</header>
+
+<main id="app">
+  <section class="view" id="v-login" hidden>
+    <div class="login">
+      <h1 class="wordmark">Forklings</h1>
+      <p class="tag">A pocket pet for developers. Raise it, dress it, coach it, and it battles on its own.</p>
+      <div class="panel login-box">
+        <button class="btn" id="ghBtn" type="button">Log in with GitHub</button>
+        <p class="small dim" id="ghNote">GitHub is used for your name only. Forklings never reads your repos or activity.</p>
+        <hr>
+        <form id="demoForm" autocomplete="off">
+          <label for="demoHandle" class="lbl">Demo login <span class="badge warn">unverified</span></label>
+          <p class="small dim">Pick any handle to play now. It isn't checked against GitHub, it's marked unverified on the leaderboard, and the pet lives in this browser's session.</p>
+          <div class="row">
+            <input class="handle" id="demoHandle" name="handle" placeholder="your-handle" maxlength="39" spellcheck="false" autocapitalize="off" required>
+            <button class="btn ghost" type="submit">Play demo</button>
+          </div>
+          <p class="err" id="demoErr" role="alert"></p>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="v-hatch" hidden>
+    <div class="hatch-wrap">
+      <h2>An egg, just for you</h2>
+      <p class="dim">Its seed comes from your handle, this exact second and a secret salt, so nobody can predict a hatch.</p>
+      <div class="stage ar43"><canvas id="hatchCanvas" aria-label="Your egg"></canvas><div class="card" id="hatchCard" aria-live="polite"></div></div>
+      <div class="actions"><button class="btn" id="hatchBtn" type="button">Hatch</button><button class="btn" id="meetBtn" type="button" hidden>Take it home</button></div>
+    </div>
+  </section>
+
+  <section class="view" id="v-home" hidden>
+    <div class="home-grid">
+      <div>
+        <div class="stage ar169"><canvas id="homeCanvas" aria-label="Your Forkling at home"></canvas></div>
+        <div class="namebar"><span class="nm" id="petName"></span><span class="stars" id="petStars"></span><span class="dim small" id="petMeta"></span></div>
+        <div class="care" role="group" aria-label="Care">
+          <button class="btn" data-care="feed" type="button">Feed</button>
+          <button class="btn" data-care="play" type="button">Play</button>
+          <button class="btn ghost" data-care="pat" type="button">Pat</button>
+          <button class="btn ghost" data-care="nap" type="button" id="napBtn">Nap</button>
+        </div>
+        <p class="toastline" id="careMsg" aria-live="polite"></p>
+      </div>
+      <div>
+        <div class="panel stats" id="stats"></div>
+        <h3 class="sub">Wardrobe</h3>
+        <p class="small dim">Head, face and neck are cosmetic. A held item gives a small battle edge (at most +6% to one stat). Tap and hold an item to see it.</p>
+        <div class="wardrobe" id="wardrobe" aria-label="Wardrobe"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="v-coach" hidden>
+    <h2>Coach, don't control</h2>
+    <p class="dim">Battles run on their own, using the plan you set here. Your Forkling follows it even when you're away.</p>
+    <form class="panel coach" id="coachForm">
+      <div class="field">
+        <label for="aggr" class="lbl">Aggression <span id="aggrVal" class="dim"></span></label>
+        <input type="range" id="aggr" name="aggression" min="0" max="100" step="5">
+        <p class="small dim">High: keeps attacking. Low: braces with Code Review more often, which halves the next hit and powers up its next attack.</p>
+      </div>
+      <fieldset class="field"><legend class="lbl">Signature move <span class="dim" id="specialName"></span></legend>
+        <label class="opt"><input type="radio" name="special" value="open"> Lead with it, use it whenever it's ready</label>
+        <label class="opt"><input type="radio" name="special" value="save"> Save it to finish the rival off (or when in trouble)</label>
+      </fieldset>
+      <div class="field">
+        <label for="healAt" class="lbl">Rollback (heal, twice per battle)</label>
+        <select id="healAt" name="healAt">
+          <option value="0">Never heal</option><option value="25">Below 25% HP</option><option value="40">Below 40% HP</option><option value="60">Below 60% HP</option>
+        </select>
+      </div>
+      <fieldset class="field"><legend class="lbl">Style</legend>
+        <label class="opt"><input type="radio" name="style" value="steady"> Steady: rarely misses, rarely crits</label>
+        <label class="opt"><input type="radio" name="style" value="balanced"> Balanced</label>
+        <label class="opt"><input type="radio" name="style" value="reckless"> Reckless: hits harder and crits often, but misses more</label>
+      </fieldset>
+      <div class="row"><button class="btn" type="submit">Save plan</button><span class="toastline" id="coachMsg" aria-live="polite"></span></div>
+    </form>
+  </section>
+
+  <section class="view" id="v-battle" hidden>
+    <div class="battle-grid">
+      <div>
+        <div class="stage ar169"><canvas id="battleCanvas" aria-label="Battle replay"></canvas></div>
+        <div class="row under">
+          <button class="btn" id="fightBtn" type="button">Find a battle</button>
+          <button class="btn ghost small-btn" id="speedBtn" type="button">Speed ×1</button>
+          <button class="btn ghost small-btn" id="skipBtn" type="button">Skip</button>
+        </div>
+        <p class="toastline" id="battleMsg" aria-live="polite"></p>
+      </div>
+      <div>
+        <h3 class="sub">Battle log</h3>
+        <p class="small dim">Other players can challenge your Forkling while you're away. Replays re-run from the battle seed.</p>
+        <ul class="log" id="battleLog"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="v-ranks" hidden>
+    <h2>Leaderboard</h2>
+    <h3 class="sub">Ranked</h3>
+    <p class="dim small">GitHub players whose account is at least 30 days old. Rating moves fully between players and only a little against house bots.</p>
+    <ol class="ranks" id="ranks"></ol>
+    <h3 class="sub">Unranked</h3>
+    <p class="dim small">Demo players and newer GitHub accounts. They battle house bots, so this list is by wins.</p>
+    <ol class="ranks" id="ranksU"></ol>
+  </section>
+
+  <section class="view" id="v-api" hidden>
+    <h2>API tokens</h2>
+    <p class="dim">For tools such as a future Claude Code, Pi or Codex integration. Send <code>Authorization: Bearer fk_…</code> to the JSON API.</p>
+    <div class="panel">
+      <form class="row" id="tokenForm"><input class="handle wide" id="tokenName" placeholder="Token name, e.g. laptop" maxlength="40"><button class="btn" type="submit">Create token</button></form>
+      <p class="tokenout" id="tokenOut" hidden></p>
+      <ul class="log" id="tokenList"></ul>
+    </div>
+    <h3 class="sub">Endpoints</h3>
+    <pre class="term" id="apiDocs">GET  /api/me                 your Forkling, needs and wardrobe
+POST /api/care      {"action":"feed"|"play"|"pat"|"nap"}
+POST /api/equip     {"slot":"head","item":"beanie"|null}
+POST /api/tactics   {"aggression":60,"special":"open","healAt":25,"style":"balanced"}
+POST /api/battle               fight now, returns the outcome and replay seed
+GET  /api/battles              your battle log
+GET  /api/battles/:id          replay: seed + both snapshots
+GET  /api/leaderboard</pre>
+  </section>
+</main>
+
+<nav class="tabs" id="tabs" hidden>
+  <a href="#home" data-tab="home">Home</a>
+  <a href="#coach" data-tab="coach">Coach</a>
+  <a href="#battle" data-tab="battle">Battle<span class="dot" id="battleDot" hidden></span></a>
+  <a href="#ranks" data-tab="ranks">Ranks</a>
+  <a href="#api" data-tab="api">API</a>
+</nav>
+
+<div class="overlay" id="evoOverlay" hidden>
+  <div class="evo-box">
+    <div class="stage ar43"><canvas id="evoCanvas" aria-label="Evolution"></canvas></div>
+    <button class="btn" id="evoDone" type="button" hidden>Wonderful</button>
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

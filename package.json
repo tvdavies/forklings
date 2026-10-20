@@ -1,0 +1,20 @@
+{
+  "name": "forklings",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs && wrangler dev",
+    "test": "bun test test/unit",
+    "e2e": "node test/e2e/run.mjs",
+    "deploy": "node scripts/build.mjs && wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261019.1",
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.64.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.151.3"
+  }
+}
