@@ -27,7 +27,7 @@ const err = (status: number, message: string) => json({ error: message }, status
 const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 const DEMO_SIGNUPS_PER_IP_PER_DAY = 5;
 const PAIR_COOLDOWN_MS = 6 * 3600 * 1000;
-export const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
+const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
 // SQL for "may play ranked": a verified GitHub player whose account is at least 30 days
 // old, or a house NPC while NPCs are on. Takes one parameter: the account-age cutoff.
 const rankedSql = (env: Env) => `(${npcsOn(env) ? 'npc = 1 OR ' : ''}(verified = 1 AND gh_created_at IS NOT NULL AND gh_created_at <= ?))`;
