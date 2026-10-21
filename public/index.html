@@ -15,6 +15,31 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:wght@400;600;700&family=Pixelify+Sans:wght@400..700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
+<style>
+/* Boot screen: painted from this HTML before app.js runs, then swapped for the app or a retry panel. */
+.boot{position:fixed;inset:0;z-index:15;display:grid;place-content:center;justify-items:center;padding:24px;text-align:center}
+.boot-egg{position:relative;width:120px;height:132px;margin-bottom:30px}
+.boot-egg::before{content:"";position:absolute;inset:-72px;background:radial-gradient(closest-side,rgba(255,242,220,.2),rgba(191,152,255,.08) 55%,transparent);transition:opacity .6s}
+.boot-egg::after{content:"";position:absolute;left:12px;right:12px;bottom:-14px;height:16px;background:radial-gradient(closest-side,rgba(18,12,28,.75),transparent)}
+.boot-egg svg{position:relative;z-index:1;display:block;width:100%;height:100%;shape-rendering:crispEdges;transition:filter .6s}
+.boot-egg g{visibility:hidden}
+.boot-egg .egg-still{visibility:visible}
+.boot[data-state=loading] .egg-still{animation:egg-still 1.8s steps(1,end) infinite}
+.boot[data-state=loading] .egg-right{animation:egg-right 1.8s steps(1,end) infinite}
+.boot[data-state=loading] .egg-left{animation:egg-left 1.8s steps(1,end) infinite}
+@keyframes egg-still{0%{visibility:visible}5%{visibility:hidden}10%{visibility:visible}15%{visibility:hidden}20%{visibility:visible}25%{visibility:hidden}30%{visibility:visible}35%{visibility:hidden}40%{visibility:visible}}
+@keyframes egg-right{0%{visibility:hidden}5%{visibility:visible}10%{visibility:hidden}25%{visibility:visible}30%{visibility:hidden}}
+@keyframes egg-left{0%{visibility:hidden}15%{visibility:visible}20%{visibility:hidden}35%{visibility:visible}40%{visibility:hidden}}
+.boot[data-state=error] .boot-egg::before{opacity:0}
+.boot[data-state=error] .boot-egg svg{filter:saturate(.45) brightness(.75)}
+.boot-line{font:600 22px/1.2 var(--f-pixel);color:var(--moon);margin:0 auto}
+.boot[data-state=error] .boot-line{font-size:30px}
+.boot-why{color:var(--haze);font-size:16px;max-width:32ch;margin:12px auto 0}
+.boot-why:empty{display:none}
+.boot .btn{margin-top:22px}
+.boot .btn[aria-disabled=true]{cursor:progress;filter:saturate(.5)}
+@media (prefers-reduced-motion:reduce){.boot-egg g{animation:none!important}.boot-egg::before,.boot-egg svg{transition:none}}
+</style>
 </head>
 <body>
 <header class="top" id="top" hidden>
@@ -182,6 +207,19 @@ GET  /api/leaderboard</pre>
     <div class="stage ar43"><canvas id="evoCanvas" aria-label="Evolution"></canvas></div>
     <button class="btn" id="evoDone" type="button" hidden>Wonderful</button>
   </div>
+</div>
+
+<div class="boot" id="boot" data-state="loading">
+  <div class="boot-egg" aria-hidden="true"><svg viewBox="0 0 20 22" width="120" height="132">
+<g class="egg-still"><path fill="#1a1124" d="M7 0h6v1h-6zM6 1h1v1h-1zM13 1h1v1h-1zM5 2h1v1h-1zM14 2h1v1h-1zM4 3h1v1h-1zM15 3h1v1h-1zM3 4h1v1h-1zM16 4h1v1h-1zM2 5h1v1h-1zM17 5h1v1h-1zM2 6h1v1h-1zM17 6h1v1h-1zM1 7h1v1h-1zM18 7h1v1h-1zM1 8h1v1h-1zM18 8h1v1h-1zM1 9h1v1h-1zM18 9h1v1h-1zM1 10h1v1h-1zM18 10h1v1h-1zM1 11h1v1h-1zM18 11h1v1h-1zM0 12h1v1h-1zM19 12h1v1h-1zM1 13h1v1h-1zM18 13h1v1h-1zM1 14h1v1h-1zM18 14h1v1h-1zM1 15h1v1h-1zM18 15h1v1h-1zM1 16h1v1h-1zM18 16h1v1h-1zM2 17h1v1h-1zM17 17h1v1h-1zM3 18h1v1h-1zM16 18h1v1h-1zM4 19h1v1h-1zM15 19h1v1h-1zM5 20h2v1h-2zM13 20h2v1h-2zM7 21h6v1h-6z"/><path fill="#ffffff" d="M7 1h6v1h-6zM6 2h2v1h-2zM5 3h2v1h-2zM4 4h2v1h-2zM3 5h2v1h-2zM3 6h1v1h-1zM2 7h2v1h-2zM2 8h1v1h-1zM2 9h1v1h-1zM2 12h1v1h-1zM2 14h1v1h-1zM2 15h1v1h-1zM2 16h1v1h-1z"/><path fill="#f1f3ff" d="M8 2h6v1h-6zM7 3h8v1h-8zM6 4h9v1h-9zM5 5h11v1h-11zM4 6h12v1h-12zM4 7h12v1h-12zM3 8h13v1h-13zM3 9h13v1h-13zM4 10h2v1h-2zM8 10h2v1h-2zM12 10h2v1h-2zM16 10h1v1h-1zM4 11h2v1h-2zM8 11h2v1h-2zM12 11h2v1h-2zM3 12h1v1h-1zM6 12h2v1h-2zM10 12h2v1h-2zM14 12h2v1h-2zM2 13h2v1h-2zM6 13h2v1h-2zM10 13h2v1h-2zM14 13h2v1h-2zM3 14h13v1h-13zM3 15h12v1h-12zM3 16h11v1h-11zM3 17h10v1h-10zM5 18h6v1h-6z"/><path fill="#c1c6e0" d="M15 4h1v1h-1zM16 5h1v1h-1zM16 6h1v1h-1zM16 7h2v1h-2zM16 8h2v1h-2zM16 9h2v1h-2zM17 10h1v1h-1zM16 11h2v1h-2zM18 12h1v1h-1zM16 14h2v1h-2zM15 15h3v1h-3zM14 16h4v1h-4zM13 17h4v1h-4zM4 18h1v1h-1zM11 18h5v1h-5zM5 19h10v1h-10zM7 20h6v1h-6z"/><path fill="#bf98ff" d="M2 10h2v1h-2zM6 10h2v1h-2zM10 10h2v1h-2zM14 10h2v1h-2zM2 11h2v1h-2zM6 11h2v1h-2zM10 11h2v1h-2zM14 11h2v1h-2zM1 12h1v1h-1zM4 12h2v1h-2zM8 12h2v1h-2zM12 12h2v1h-2zM4 13h2v1h-2zM8 13h2v1h-2zM12 13h2v1h-2z"/><path fill="#8a5fd6" d="M16 12h2v1h-2zM16 13h2v1h-2z"/></g>
+<g class="egg-right"><path fill="#1a1124" d="M8 0h6v1h-6zM7 1h1v1h-1zM14 1h1v1h-1zM6 2h1v1h-1zM15 2h1v1h-1zM5 3h1v1h-1zM16 3h1v1h-1zM4 4h1v1h-1zM17 4h1v1h-1zM3 5h1v1h-1zM17 5h1v1h-1zM3 6h1v1h-1zM18 6h1v1h-1zM2 7h1v1h-1zM18 7h1v1h-1zM2 8h1v1h-1zM19 8h1v1h-1zM1 9h1v1h-1zM19 9h1v1h-1zM1 10h1v1h-1zM19 10h1v1h-1zM1 11h1v1h-1zM19 11h1v1h-1zM1 12h1v1h-1zM19 12h1v1h-1zM1 13h1v1h-1zM19 13h1v1h-1zM1 14h1v1h-1zM19 14h1v1h-1zM1 15h1v1h-1zM18 15h1v1h-1zM2 16h1v1h-1zM18 16h1v1h-1zM2 17h1v1h-1zM17 17h1v1h-1zM3 18h1v1h-1zM16 18h1v1h-1zM4 19h1v1h-1zM15 19h1v1h-1zM5 20h2v1h-2zM13 20h2v1h-2zM7 21h6v1h-6z"/><path fill="#ffffff" d="M8 1h6v1h-6zM7 2h2v1h-2zM6 3h2v1h-2zM5 4h2v1h-2zM4 5h2v1h-2zM4 6h1v1h-1zM3 7h2v1h-2zM3 8h1v1h-1zM2 9h2v1h-2zM2 12h1v1h-1zM2 13h1v1h-1zM2 14h1v1h-1zM2 15h1v1h-1zM3 17h1v1h-1z"/><path fill="#f1f3ff" d="M9 2h6v1h-6zM8 3h7v1h-7zM7 4h9v1h-9zM6 5h10v1h-10zM5 6h12v1h-12zM5 7h12v1h-12zM4 8h13v1h-13zM4 9h13v1h-13zM4 10h2v1h-2zM8 10h2v1h-2zM12 10h2v1h-2zM16 10h1v1h-1zM4 11h2v1h-2zM8 11h2v1h-2zM12 11h2v1h-2zM16 11h1v1h-1zM3 12h1v1h-1zM6 12h2v1h-2zM10 12h2v1h-2zM14 12h2v1h-2zM3 13h1v1h-1zM6 13h2v1h-2zM10 13h2v1h-2zM14 13h2v1h-2zM3 14h13v1h-13zM3 15h12v1h-12zM3 16h11v1h-11zM4 17h9v1h-9zM5 18h6v1h-6z"/><path fill="#c1c6e0" d="M15 3h1v1h-1zM16 4h1v1h-1zM16 5h1v1h-1zM17 6h1v1h-1zM17 7h1v1h-1zM17 8h2v1h-2zM17 9h2v1h-2zM17 10h1v1h-1zM17 11h1v1h-1zM18 12h1v1h-1zM18 13h1v1h-1zM16 14h3v1h-3zM15 15h3v1h-3zM14 16h4v1h-4zM13 17h4v1h-4zM4 18h1v1h-1zM11 18h5v1h-5zM5 19h10v1h-10zM7 20h6v1h-6z"/><path fill="#bf98ff" d="M2 10h2v1h-2zM6 10h2v1h-2zM10 10h2v1h-2zM14 10h2v1h-2zM2 11h2v1h-2zM6 11h2v1h-2zM10 11h2v1h-2zM14 11h2v1h-2zM4 12h2v1h-2zM8 12h2v1h-2zM12 12h2v1h-2zM16 12h1v1h-1zM4 13h2v1h-2zM8 13h2v1h-2zM12 13h2v1h-2z"/><path fill="#8a5fd6" d="M18 10h1v1h-1zM18 11h1v1h-1zM17 12h1v1h-1zM16 13h2v1h-2z"/></g>
+<g class="egg-left"><path fill="#1a1124" d="M6 0h6v1h-6zM5 1h1v1h-1zM12 1h1v1h-1zM4 2h1v1h-1zM13 2h1v1h-1zM3 3h1v1h-1zM14 3h1v1h-1zM2 4h1v1h-1zM15 4h1v1h-1zM2 5h1v1h-1zM16 5h1v1h-1zM1 6h1v1h-1zM16 6h1v1h-1zM1 7h1v1h-1zM17 7h1v1h-1zM0 8h1v1h-1zM17 8h1v1h-1zM0 9h1v1h-1zM18 9h1v1h-1zM0 10h1v1h-1zM18 10h1v1h-1zM0 11h1v1h-1zM18 11h1v1h-1zM0 12h1v1h-1zM18 12h1v1h-1zM0 13h1v1h-1zM18 13h1v1h-1zM0 14h1v1h-1zM18 14h1v1h-1zM1 15h1v1h-1zM18 15h1v1h-1zM1 16h1v1h-1zM17 16h1v1h-1zM2 17h1v1h-1zM17 17h1v1h-1zM3 18h1v1h-1zM16 18h1v1h-1zM4 19h1v1h-1zM15 19h1v1h-1zM5 20h2v1h-2zM13 20h2v1h-2zM7 21h6v1h-6z"/><path fill="#ffffff" d="M6 1h6v1h-6zM5 2h2v1h-2zM4 3h2v1h-2zM3 4h2v1h-2zM3 5h1v1h-1zM2 6h2v1h-2zM2 7h1v1h-1zM1 8h2v1h-2zM1 9h1v1h-1zM1 10h1v1h-1zM1 11h1v1h-1zM1 14h1v1h-1zM2 16h1v1h-1z"/><path fill="#f1f3ff" d="M7 2h6v1h-6zM6 3h8v1h-8zM5 4h9v1h-9zM4 5h11v1h-11zM4 6h11v1h-11zM3 7h13v1h-13zM3 8h13v1h-13zM2 9h14v1h-14zM4 10h2v1h-2zM8 10h2v1h-2zM12 10h2v1h-2zM4 11h2v1h-2zM8 11h2v1h-2zM12 11h2v1h-2zM2 12h2v1h-2zM6 12h2v1h-2zM10 12h2v1h-2zM14 12h2v1h-2zM2 13h2v1h-2zM6 13h2v1h-2zM10 13h2v1h-2zM14 13h2v1h-2zM2 14h13v1h-13zM2 15h13v1h-13zM3 16h11v1h-11zM3 17h10v1h-10zM5 18h6v1h-6z"/><path fill="#c1c6e0" d="M14 4h1v1h-1zM15 5h1v1h-1zM15 6h1v1h-1zM16 7h1v1h-1zM16 8h1v1h-1zM16 9h2v1h-2zM16 10h2v1h-2zM16 11h2v1h-2zM15 14h3v1h-3zM15 15h3v1h-3zM14 16h3v1h-3zM13 17h4v1h-4zM4 18h1v1h-1zM11 18h5v1h-5zM5 19h10v1h-10zM7 20h6v1h-6z"/><path fill="#bf98ff" d="M2 10h2v1h-2zM6 10h2v1h-2zM10 10h2v1h-2zM14 10h2v1h-2zM2 11h2v1h-2zM6 11h2v1h-2zM10 11h2v1h-2zM14 11h2v1h-2zM1 12h1v1h-1zM4 12h2v1h-2zM8 12h2v1h-2zM12 12h2v1h-2zM1 13h1v1h-1zM4 13h2v1h-2zM8 13h2v1h-2zM12 13h2v1h-2z"/><path fill="#8a5fd6" d="M16 12h2v1h-2zM16 13h2v1h-2z"/></g>
+  </svg></div>
+  <div role="status">
+    <p class="boot-line" id="bootLine">Waking your Forkling…</p>
+    <p class="boot-why" id="bootWhy"></p>
+  </div>
+  <button class="btn" id="bootRetry" type="button" hidden>Try again</button>
 </div>
 
 <script type="module" src="/app.js"></script>

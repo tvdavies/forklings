@@ -117,6 +117,11 @@ input[type=range]{width:100%;max-width:420px;accent-color:var(--butter);height:2
 .log .meta{font-size:13px;color:var(--haze)}
 .log .btn{font-size:14px;padding:8px 10px}
 .log .new{color:var(--butter);font:600 12px/1 var(--f-pixel)}
+.log li.empty{display:block;background:var(--night);--bc:var(--dusk3);padding:14px 16px}
+.log li.empty p{color:var(--haze);font-size:15px;margin:0 0 6px}
+.log li.empty p:last-child{margin:0}
+.log li.empty .row{gap:4px}
+.log li.empty .btn{display:inline-flex;align-items:center;font-size:17px;padding:12px 16px;text-decoration:none}
 
 /* ranks */
 .ranks{list-style:none;padding:0;margin:0;max-width:760px;display:grid;gap:8px;counter-reset:r}
