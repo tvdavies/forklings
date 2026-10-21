@@ -22,7 +22,8 @@
     { "binding": "DB", "database_name": "forklings-db", "database_id": "16108f11-44aa-4c37-8743-619bfb0dc5b0", "migrations_dir": "migrations" }
   ],
   "vars": { "PUBLIC_ORIGIN": "https://forklings.dev", "DEMO_LOGIN": "on", "NPCS": "on" },
-  // House NPCs: seeding, care and their battles run on this schedule.
-  "triggers": { "crons": ["*/20 * * * *"] },
+  // House NPCs: seeding, care and their battles run every 20 minutes.
+  // The shop restocks at 00:05 UTC (SHOP_CRON in src/worker/index.ts).
+  "triggers": { "crons": ["*/20 * * * *", "5 0 * * *"] },
   "observability": { "enabled": true }
 }

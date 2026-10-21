@@ -3,6 +3,7 @@
 
 import type { Snapshot } from '../shared/battle';
 import { makeBot } from '../shared/bots';
+import { nextUtcMidnight, utcDay } from '../shared/economy';
 import { genome } from '../shared/genome';
 import { isRecord, prop } from '../shared/json';
 import { NPC_ROSTER, npcPid } from '../shared/npcs';
@@ -13,6 +14,7 @@ import type { BattleOutcome } from './battle';
 import type { Env } from './env';
 import { handleMcp } from './mcp';
 import type { PlayerDO, PlayerView } from './player';
+import { ensureShopDay, findOffer, offersFor } from './shop';
 
 export { BattleDO } from './battle';
 export { PlayerDO } from './player';
@@ -25,6 +27,8 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
 const err = (status: number, message: string) => json({ error: message }, status);
 
 const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
+/** The nightly shop restock (must match wrangler.jsonc). Everything else on the cron is the NPC tick. */
+export const SHOP_CRON = '5 0 * * *';
 const DEMO_SIGNUPS_PER_IP_PER_DAY = 5;
 const PAIR_COOLDOWN_MS = 6 * 3600 * 1000;
 export const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
@@ -270,6 +274,17 @@ async function seedNpcs(env: Env, now: number) {
   }
 }
 
+/** Once a day, after the shelf is made, each NPC may buy and wear something new. */
+async function npcShopping(env: Env, npcs: NpcRow[], now: number) {
+  const day = utcDay(now);
+  const offers = await offersFor(env, await ensureShopDay(env, day, now));
+  for (const n of npcs) {
+    const stub = await player(env, { pid: n.pid, h: n.handle, v: false });
+    const got = await stub.npcShop(offers, now);
+    if (got) console.log('npc bought', n.handle, got);
+  }
+}
+
 /** Every tick: NPCs look after their Forklings like an attentive player would, and a few pick a fight. */
 async function npcTick(env: Env, now: number) {
   if (!npcsOn(env)) return;
@@ -289,6 +304,9 @@ async function npcTick(env: Env, now: number) {
     else if (s.mood < 70 && s.energy > 60) todo.push('play');
     for (const a of todo) await stub.care(a, now);
   }
+  // The first tick after 00:20 UTC goes shopping (the shelf is made at 00:05).
+  const sinceMidnight = now - Date.parse(`${utcDay(now)}T00:00:00Z`);
+  if (sinceMidnight >= 20 * 60e3 && sinceMidnight < 40 * 60e3) await npcShopping(env, npcs, now);
   const order = npcs
     .map((n) => ({ n, k: Math.random() }))
     .sort((x, y) => x.k - y.k)
@@ -297,6 +315,22 @@ async function npcTick(env: Env, now: number) {
     const r = await runBattle(env, { pid: n.pid, h: n.handle, v: false });
     if (!r.ok) console.log('npc battle skipped', n.handle, r.error);
   }
+}
+
+// ---------- shop ----------
+async function shop(env: Env, me: PlayerStub) {
+  const now = Date.now();
+  const day = await ensureShopDay(env, utcDay(now), now);
+  const [offers, v] = await Promise.all([offersFor(env, day), me.view(now)]);
+  return json({ day: day.day, restockAt: nextUtcMidnight(now), offers, ...v });
+}
+
+async function buy(env: Env, me: PlayerStub, body: JsonBody) {
+  const offer = await findOffer(env, body.item);
+  if (!offer) return err(409, 'That item has left the shop. New stock arrives at midnight UTC.');
+  const r = await me.buy(offer, body.requestId);
+  if (!r.ok) return json({ error: r.error, code: r.code, balance: r.balance, ...r.view }, 409);
+  return json(r);
 }
 
 // ---------- tokens ----------
@@ -387,6 +421,10 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
       const r = await me.care(body.action);
       return json({ ...r, ...(await me.view()) }, r.ok ? 200 : 409);
     }
+    case p === '/api/shop' && m === 'GET':
+      return shop(env, me);
+    case p === '/api/shop/buy' && m === 'POST':
+      return buy(env, me, body);
     case p === '/api/equip' && m === 'POST': {
       const r = await me.equip(String(body.slot), body.item ?? null);
       return r.ok ? json({ ok: true, ...(await me.view()) }) : err(409, r.error);
@@ -443,6 +481,7 @@ export default {
     }
   },
   async scheduled(ctl: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(npcTick(env, ctl.scheduledTime));
+    if (ctl.cron === SHOP_CRON) ctx.waitUntil(ensureShopDay(env, utcDay(ctl.scheduledTime), ctl.scheduledTime));
+    else ctx.waitUntil(npcTick(env, ctl.scheduledTime));
   },
 } satisfies ExportedHandler<Env>;

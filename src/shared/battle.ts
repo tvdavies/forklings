@@ -1,7 +1,7 @@
 // Deterministic auto-battle. Given two snapshots and a battle seed, simulate()
 // always produces the same event log, so a replay is just seed + snapshots.
 
-import { ITEM_IDS, ITEMS } from './compose';
+import { ITEM_IDS, ITEMS, type ItemDef } from './compose';
 import { type Genome, genome, TYPES } from './genome';
 import { mulberry, seedToInt } from './rng';
 import { compileTactics, decide, type Strategy, sanitiseStrategy, type Tactics } from './strategy';
@@ -19,6 +19,8 @@ export interface Snapshot {
   level: number;
   xp?: number;
   items: Record<string, string | null>;
+  /** Definitions of equipped shop items, which aren't in the built-in catalogue: for drawing and held effects. */
+  gear?: Record<string, ItemDef>;
   tactics: Tactics;
   strategy?: Strategy;
   rating?: number;
@@ -36,6 +38,18 @@ export const HELD_EFFECTS: Record<string, { stat: 'atk' | 'def' | 'spd' | 'hp'; 
   keyboard: { stat: 'atk', pct: 6, label: '+6% Attack' },
 };
 export const HELD_CAP_PCT = 6;
+
+const STAT_LABEL = { hp: 'HP', atk: 'Attack', def: 'Defence', spd: 'Speed' } as const;
+/** The battle effect of a held item: built-in, or a shop item's own, always within the cap. */
+export function heldEffect(id: string | null | undefined, gear?: Record<string, ItemDef>) {
+  if (!id) return undefined;
+  const fixed = HELD_EFFECTS[id];
+  if (fixed) return fixed;
+  const d = gear?.[id];
+  if (!d?.effect || d.slot !== 'held' || !(d.effect.stat in STAT_LABEL)) return undefined;
+  const pct = Math.max(0, Math.min(HELD_CAP_PCT, Number(d.effect.pct) || 0));
+  return { stat: d.effect.stat, pct, label: `+${pct}% ${STAT_LABEL[d.effect.stat]}` };
+}
 
 export const MOVES: Record<string, { strike: string; special: string }> = {
   Async: { strike: 'Await Strike', special: 'Promise.all' },
@@ -73,7 +87,7 @@ export function fighter(snap: Snapshot): Fighter {
   const m = (1 + 0.06 * (Math.max(1, snap.level) - 1)) * STAGE_MULT[snap.stage];
   const st = { hp: g.base.hp * m, atk: g.base.atk * m, def: g.base.def * m, spd: g.base.spd * m };
   const held = snap.items?.held ?? null;
-  const eff = held ? HELD_EFFECTS[held] : undefined;
+  const eff = heldEffect(held, snap.gear);
   if (eff) st[eff.stat] *= 1 + Math.min(HELD_CAP_PCT, eff.pct) / 100;
   return {
     g,

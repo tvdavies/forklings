@@ -1,8 +1,9 @@
 // One Durable Object per player, on SQLite storage. Holds the creature, its
-// lazily-derived needs, the wardrobe, tactics and the player's battle log.
+// lazily-derived needs, the wardrobe, the bits wallet, tactics and the player's battle log.
 import { DurableObject } from 'cloudflare:workers';
 import { type BattleResult, compileTactics, DEFAULT_TACTICS, type Snapshot, sanitiseTactics, type Tactics } from '../shared/battle';
-import { ITEMS, type Slot } from '../shared/compose';
+import { ITEMS, type ItemDef, isSlot, noItems, type Slot } from '../shared/compose';
+import { checkPurchase, type Offer, REWARDS } from '../shared/economy';
 import { genome } from '../shared/genome';
 import { hatchSeed, hatchTimeIso } from '../shared/rng';
 import { formatStrategy, parseScript, ScriptError } from '../shared/script';
@@ -20,6 +21,7 @@ import {
 } from '../shared/state';
 import type { Strategy, Style } from '../shared/strategy';
 import type { Env } from './env';
+import { type BuyResult, type LedgerRow, type Today, Wallet } from './wallet';
 
 const STARTER_ITEMS = ['beanie', 'glasses', 'mug'];
 export const BATTLE_ENERGY = 15;
@@ -54,6 +56,9 @@ export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: strin
 
 // SQLite rows. These are `type`s, not interfaces: SqlStorage.exec<T> wants an index-signature-compatible row.
 export type InventoryRow = { item: string; got_at: number; source: string };
+type InventoryDbRow = InventoryRow & { def: string | null };
+/** A wardrobe entry as the client sees it: shop items carry their own definition. */
+export type InventoryItem = InventoryRow & { def?: ItemDef };
 export type BattleRow = {
   id: string;
   at: number;
@@ -83,6 +88,8 @@ export interface CreatureView {
   hatchedAt: string;
   handle: string;
   items: Record<string, string | null>;
+  /** Definitions of equipped shop items, for drawing. */
+  gear: Record<string, ItemDef>;
   tactics: Tactics;
   strategy: StrategyView;
   state: PetState;
@@ -95,10 +102,19 @@ export interface CreatureView {
   battleEnergy: number;
 }
 
+export interface WalletView {
+  bits: number;
+  today: Today;
+  /** How much each part of today's play is worth, for the earnings panel. */
+  rewards: typeof REWARDS;
+}
+
 export interface PlayerView {
   who: Who | null;
   creature: CreatureView | null;
-  inventory: InventoryRow[];
+  inventory: InventoryItem[];
+  /** Absent until the player has hatched. */
+  wallet?: WalletView;
   unseenDefences: number;
   /** Absent until the player has hatched. */
   now?: number;
@@ -108,6 +124,8 @@ export interface CareOutcome {
   ok: boolean;
   message: string;
   xpGain?: number;
+  /** Bits this care earned (daily care, level-ups). */
+  bits?: number;
 }
 
 export type TacticsResult = Result<{ tactics: Tactics; strategy: StrategyView }>;
@@ -122,7 +140,9 @@ export interface StoredReplay {
 }
 export type RecordResult =
   | { ok: false }
-  | { ok: true; outcome: 'win' | 'loss' | 'draw'; xp: number; loot: string | null; lootNote: string | null };
+  | { ok: true; outcome: 'win' | 'loss' | 'draw'; xp: number; loot: string | null; lootNote: string | null; bits: number };
+
+export type PurchaseResult = BuyResult & { view?: PlayerView };
 
 export interface ReplayView extends StoredReplay {
   id: string;
@@ -135,6 +155,7 @@ const isCareAction = (a: unknown): a is CareAction => a === 'feed' || a === 'pla
 
 export class PlayerDO extends DurableObject<Env> {
   sql: SqlStorage;
+  wallet: Wallet;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
@@ -145,6 +166,10 @@ export class PlayerDO extends DurableObject<Env> {
         opp_bot INTEGER NOT NULL, outcome TEXT NOT NULL, xp INTEGER NOT NULL, loot TEXT, rating_delta INTEGER NOT NULL DEFAULT 0, replay TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS care_log (action TEXT PRIMARY KEY, at INTEGER NOT NULL);
     `);
+    // Shop items keep their own definition with the wardrobe entry. Added to existing objects in place.
+    const cols = this.sql.exec<{ name: string }>('PRAGMA table_info(inventory)').toArray();
+    if (!cols.some((c) => c.name === 'def')) this.sql.exec('ALTER TABLE inventory ADD COLUMN def TEXT');
+    this.wallet = new Wallet(this.sql, (fn) => ctx.storage.transactionSync(fn));
   }
 
   /** Read a profile value. The stored JSON was written by `set`, so it is trusted to be a `T`. */
@@ -157,7 +182,67 @@ export class PlayerDO extends DurableObject<Env> {
   }
 
   private creature(): Creature | null {
-    return this.get<Creature>('creature');
+    const c = this.get<Creature>('creature');
+    // Creatures from before the body slot existed get it, empty.
+    if (c) c.items = { ...noItems(), ...c.items };
+    return c;
+  }
+
+  private isNpc(): boolean {
+    return !!this.get<Who>('who')?.pid.startsWith('npc:');
+  }
+
+  private inventory(): InventoryItem[] {
+    return this.sql
+      .exec<InventoryDbRow>('SELECT item, got_at, source, def FROM inventory ORDER BY got_at')
+      .toArray()
+      .map(({ def, ...r }) => (def ? { ...r, def: JSON.parse(def) as ItemDef } : r));
+  }
+  private owns(id: string): boolean {
+    return this.sql.exec('SELECT 1 FROM inventory WHERE item = ?', id).toArray().length > 0;
+  }
+  /** An item's definition: built-in, or the copy stored when it was bought. */
+  private itemDef(id: string): ItemDef | undefined {
+    if (ITEMS[id]) return ITEMS[id];
+    const r = this.sql.exec<{ def: string | null }>('SELECT def FROM inventory WHERE item = ?', id).toArray()[0];
+    return r?.def ? (JSON.parse(r.def) as ItemDef) : undefined;
+  }
+  /** Definitions of the equipped shop items. */
+  private gearOf(c: Creature): Record<string, ItemDef> {
+    const gear: Record<string, ItemDef> = {};
+    for (const id of Object.values(c.items)) {
+      if (!id || ITEMS[id]) continue;
+      const d = this.itemDef(id);
+      if (d) gear[id] = d;
+    }
+    return gear;
+  }
+
+  /** Open the wallet on first use, for creatures hatched before the shop existed too. */
+  private ensureWallet(c: Creature, now: number) {
+    if (!this.wallet.opened) this.wallet.open(levelForXp(c.state.xp), c.state.stage, now);
+  }
+
+  /** Copy new ledger entries to D1 for economy analytics. Best effort: the Durable Object stays authoritative. */
+  private async mirror(rows: LedgerRow[] = this.wallet.drain()) {
+    const who = this.get<Who>('who');
+    if (!rows.length || !who) return;
+    const npc = who.pid.startsWith('npc:') ? 1 : 0;
+    try {
+      await this.env.DB.batch(
+        rows.map((r) =>
+          this.env.DB.prepare(
+            'INSERT OR IGNORE INTO bits_events (pid, key, at, day, kind, delta, ref, balance, npc) VALUES (?,?,?,?,?,?,?,?,?)',
+          ).bind(who.pid, r.key, r.at, r.day, r.kind, r.delta, r.ref, r.balance, npc),
+        ),
+      );
+    } catch (e) {
+      console.error('bits mirror failed', who.pid, String(e));
+    }
+  }
+
+  private walletView(now: number): WalletView {
+    return { bits: this.wallet.balance(), today: this.wallet.today(now), rewards: REWARDS };
   }
 
   /** Integrate needs forward to now and persist the snapshot. */
@@ -180,11 +265,13 @@ export class PlayerDO extends DurableObject<Env> {
   async view(now = Date.now()): Promise<PlayerView> {
     const who = this.get<Who>('who');
     const c = this.advanced(now);
-    const inv = this.sql.exec<InventoryRow>('SELECT item, got_at, source FROM inventory ORDER BY got_at').toArray();
+    const inv = this.inventory();
     const unseen: CountRow | undefined = this.sql
       .exec<CountRow>('SELECT COUNT(*) AS n FROM battles WHERE seen = 0 AND side = 1')
       .toArray()[0];
     if (!c) return { who, creature: null, inventory: inv, unseenDefences: unseen?.n ?? 0 };
+    this.ensureWallet(c, now);
+    await this.mirror();
     const trueStage = stageForXp(c.state.xp);
     const cool: Record<string, number> = {};
     for (const r of this.sql.exec<CareLogRow>('SELECT action, at FROM care_log').toArray()) {
@@ -198,6 +285,7 @@ export class PlayerDO extends DurableObject<Env> {
         hatchedAt: c.hatchedAt,
         handle: c.handle,
         items: c.items,
+        gear: this.gearOf(c),
         tactics: c.tactics,
         strategy: this.strategyView(c),
         state: c.state,
@@ -210,6 +298,7 @@ export class PlayerDO extends DurableObject<Env> {
         battleEnergy: BATTLE_ENERGY,
       },
       inventory: inv,
+      wallet: this.walletView(now),
       unseenDefences: unseen?.n ?? 0,
       now,
     };
@@ -226,12 +315,14 @@ export class PlayerDO extends DurableObject<Env> {
       hatchedAt,
       handle: who.handle.toLowerCase(),
       state: newState(now),
-      items: { head: null, face: null, neck: null, held: null },
+      items: noItems(),
       tactics: DEFAULT_TACTICS,
     };
     this.set('creature', c);
     for (const it of STARTER_ITEMS)
       this.sql.exec('INSERT OR IGNORE INTO inventory (item, got_at, source) VALUES (?, ?, ?)', it, now, 'starter');
+    this.ensureWallet(c, now);
+    await this.mirror();
     await this.publish(now);
     return { ok: true };
   }
@@ -244,26 +335,32 @@ export class PlayerDO extends DurableObject<Env> {
     const last: { at: number } | undefined = this.sql.exec<{ at: number }>('SELECT at FROM care_log WHERE action = ?', action).toArray()[0];
     if (last && now - last.at < COOLDOWNS[action]) return { ok: false, message: 'Give it a moment.' };
     const r = care(c.state, action, now);
+    let bits = 0;
     if (r.ok) {
+      this.ensureWallet(c, now);
+      const before = levelForXp(c.state.xp);
       c.state = r.state;
       this.set('creature', c);
       this.sql.exec('INSERT OR REPLACE INTO care_log (action, at) VALUES (?, ?)', action, now);
+      const paid = [...this.wallet.levels(before, levelForXp(c.state.xp), now), this.wallet.care(c.state, now)];
+      bits = paid.reduce((s, p) => s + (p?.delta ?? 0), 0);
+      await this.mirror();
       if (r.xpGain) await this.publish(now);
     }
-    return { ok: r.ok, message: r.message, xpGain: r.xpGain };
+    return { ok: r.ok, message: r.message, xpGain: r.xpGain, ...(bits ? { bits } : {}) };
   }
 
   /** `item` is untrusted (request body): an item id, or null to take the slot off. */
   async equip(slot: string, item: unknown, now = Date.now()): Promise<Result> {
     const c = this.advanced(now);
     if (!c) return { ok: false, error: 'Hatch first.' };
-    if (!['head', 'face', 'neck', 'held'].includes(slot)) return { ok: false, error: 'Bad slot.' };
+    if (!isSlot(slot)) return { ok: false, error: 'Bad slot.' };
     if (item !== null && typeof item !== 'string') return { ok: false, error: "That doesn't go there." };
     if (item !== null) {
-      const it = ITEMS[item];
+      if (!this.owns(item))
+        return { ok: false, error: ITEMS[item] || this.itemDef(item) ? "You don't own that yet." : "That doesn't go there." };
+      const it = this.itemDef(item);
       if (!it || it.slot !== slot) return { ok: false, error: "That doesn't go there." };
-      const own = this.sql.exec('SELECT 1 FROM inventory WHERE item = ?', item).toArray().length;
-      if (!own) return { ok: false, error: "You don't own that yet." };
     }
     c.items = { ...c.items, [slot]: item };
     this.set('creature', c);
@@ -331,7 +428,7 @@ export class PlayerDO extends DurableObject<Env> {
     c.state = { ...newState(now), xp, stage: stageForXp(xp) };
     for (const it of Object.values(items))
       this.sql.exec('INSERT OR IGNORE INTO inventory (item, got_at, source) VALUES (?, ?, ?)', it, now, 'npc');
-    c.items = { head: null, face: null, neck: null, held: null, ...items };
+    c.items = { ...noItems(), ...items };
     c.tactics = sanitiseTactics(tactics);
     this.set('creature', c);
     await this.publish(now);
@@ -343,8 +440,11 @@ export class PlayerDO extends DurableObject<Env> {
     if (!c) return { ok: false };
     const s = stageForXp(c.state.xp);
     if (s > c.state.stage) {
+      this.ensureWallet(c, now);
       c.state.stage = c.state.stage + 1;
       this.set('creature', c);
+      this.wallet.evolve(c.state.stage, now);
+      await this.mirror();
       await this.publish(now);
       return { ok: true, stage: c.state.stage };
     }
@@ -364,6 +464,7 @@ export class PlayerDO extends DurableObject<Env> {
       level: levelForXp(c.state.xp),
       xp: Math.floor(c.state.xp),
       items: c.items,
+      ...(Object.keys(this.gearOf(c)).length ? { gear: this.gearOf(c) } : {}),
       tactics: c.tactics,
       ...(c.strategy ? { strategy: c.strategy } : {}),
     };
@@ -397,6 +498,20 @@ export class PlayerDO extends DurableObject<Env> {
     const opp = side === 0 ? replay.b : replay.a;
     const outcome = result.winner === null ? 'draw' : result.winner === side ? 'win' : 'loss';
     const xp = result.xp[side];
+    // A battle is recorded once. A retried call gets the first answer back and changes nothing:
+    // no second helping of XP, loot or bits.
+    type PriorRow = { outcome: 'win' | 'loss' | 'draw'; xp: number; loot: string | null };
+    const prior = this.sql.exec<PriorRow>('SELECT outcome, xp, loot FROM battles WHERE id = ?', id).toArray()[0];
+    if (prior) {
+      const [lootId, note] = (prior.loot ?? '').split(':');
+      const bits = this.wallet
+        .recent(50)
+        .filter((r) => r.ref === id)
+        .reduce((s, r) => s + r.delta, 0);
+      return { ok: true, outcome: prior.outcome, xp: prior.xp, loot: lootId || null, lootNote: note || null, bits };
+    }
+    this.ensureWallet(c, now);
+    const levelBefore = levelForXp(c.state.xp);
     c.state.xp += xp;
     c.state.mood = Math.max(0, Math.min(100, c.state.mood + (outcome === 'win' ? 6 : outcome === 'loss' ? -4 : 0)));
     let loot: string | null = null,
@@ -426,8 +541,59 @@ export class PlayerDO extends DurableObject<Env> {
       JSON.stringify(replay),
       side === 0 ? 1 : 0,
     );
+    const paid = [...this.wallet.battle(id, side, outcome, now), ...this.wallet.levels(levelBefore, levelForXp(c.state.xp), now)];
+    await this.mirror();
     await this.publish(now);
-    return { ok: true, outcome, xp, loot, lootNote };
+    return { ok: true, outcome, xp, loot, lootNote, bits: paid.reduce((s, r) => s + r.delta, 0) };
+  }
+
+  /**
+   * Buy an offer. The Worker has already checked it is on sale today and passes its terms;
+   * everything about this player (level, wardrobe, balance) is checked here, in one
+   * transaction with the charge. `requestId` is the client's, one per tap: retries are free.
+   */
+  async buy(offer: Offer, requestId: unknown, now = Date.now()): Promise<PurchaseResult> {
+    const c = this.advanced(now);
+    if (!c) return { ok: false, code: 'gone', error: 'Hatch first.', balance: 0 };
+    this.ensureWallet(c, now);
+    const r = this.wallet.buy(
+      requestId,
+      offer,
+      { level: levelForXp(c.state.xp), owns: (id) => this.owns(id) },
+      () =>
+        this.sql.exec(
+          'INSERT INTO inventory (item, got_at, source, def) VALUES (?, ?, ?, ?)',
+          offer.id,
+          now,
+          'shop',
+          ITEMS[offer.id] ? null : JSON.stringify(offer.def),
+        ),
+      now,
+    );
+    await this.mirror();
+    return { ...r, view: await this.view(now) };
+  }
+
+  /**
+   * House NPCs shop too, so the world shows the new items: once a day each buys the
+   * cheapest unlocked cosmetic it can afford and wears it. NPCs never buy held items,
+   * so their battle strength stays as tuned; their bits are flagged npc in analytics.
+   */
+  async npcShop(offers: Offer[], now = Date.now()): Promise<string | null> {
+    const c = this.advanced(now);
+    if (!c || !this.isNpc()) return null;
+    this.ensureWallet(c, now);
+    const level = levelForXp(c.state.xp);
+    const bits = this.wallet.balance();
+    const pick = offers
+      .filter((o) => o.def.slot !== 'held' && o.tag !== 'classic')
+      .filter((o) => checkPurchase(o, { level, bits, owned: this.owns(o.id) }).ok)
+      .sort((a, b) => a.price - b.price || a.id.localeCompare(b.id))[0];
+    if (!pick) return null;
+    const r = await this.buy(pick, `npc-${pick.id}`, now);
+    if (!r.ok) return null;
+    await this.equip(pick.def.slot, pick.id, now);
+    return pick.id;
   }
 
   async battles(limit = 30): Promise<BattleRow[]> {

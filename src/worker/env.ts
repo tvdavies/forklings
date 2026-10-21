@@ -7,6 +7,8 @@ export interface Env {
   PLAYER: DurableObjectNamespace<PlayerDO>;
   BATTLE: DurableObjectNamespace<BattleDO>;
   HATCH_SALT: string;
+  /** Optional secret for the shop generator; derived from HATCH_SALT when unset. */
+  SHOP_SALT?: string;
   SESSION_SECRET: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;

@@ -20,6 +20,8 @@ export interface BattleOutcome {
   loot: string | null;
   lootNote: string | null;
   ratingDelta: number;
+  /** Bits the challenger earned: the battle, a first win of the day, any level-ups. */
+  bits: number;
 }
 
 export class BattleDO extends DurableObject<Env> {
@@ -98,8 +100,8 @@ export class BattleDO extends DurableObject<Env> {
         st = strategyOf(s),
         t = s.tactics;
       stmts.push(
-        DB.prepare(`INSERT INTO battle_sides (battle_id, side, pid, bot, npc, ranked, won, level, stage, type, head, face, neck, held, strategy_source, style, special, heal_at, aggression, max_hp, hp_left, at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+        DB.prepare(`INSERT INTO battle_sides (battle_id, side, pid, bot, npc, ranked, won, level, stage, type, head, face, neck, body, held, strategy_source, style, special, heal_at, aggression, max_hp, hp_left, at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
           id,
           side,
           s.pid,
@@ -113,6 +115,7 @@ export class BattleDO extends DurableObject<Env> {
           s.items?.head ?? null,
           s.items?.face ?? null,
           s.items?.neck ?? null,
+          s.items?.body ?? null,
           s.items?.held ?? null,
           st.source,
           st.style,
@@ -146,6 +149,7 @@ export class BattleDO extends DurableObject<Env> {
       loot: recA.ok ? recA.loot : null,
       lootNote: recA.ok ? recA.lootNote : null,
       ratingDelta: ranked ? na - ra : 0,
+      bits: recA.ok ? recA.bits : 0,
     };
   }
 }

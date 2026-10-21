@@ -102,6 +102,32 @@ export function itemEffect(d: ItemDef | undefined, classic?: { stat: Stat; pct: 
   return e && d?.slot === 'held' ? { stat: e.stat, pct: Math.min(HELD_CAP_PCT, e.pct) } : undefined;
 }
 
+/**
+ * Bits for a player who already had a Forkling when the shop opened: the usual starting 50
+ * plus 10 per level above 1, up to 250. Their past levels and evolutions don't pay out again.
+ */
+export const welcomeBits = (level: number) => Math.min(250, START_BITS + 10 * Math.max(0, level - 1));
+
+/** The lock line under a level-locked item, or null when it's unlocked. */
+export function lockMessage(itemLevel: number, myLevel: number): string | null {
+  if (myLevel >= itemLevel) return null;
+  const gap = itemLevel - myLevel;
+  return `Unlocks at level ${itemLevel}: ${gap} level${gap === 1 ? '' : 's'} to go.`;
+}
+
+export type PurchaseCheck = { ok: true } | { ok: false; code: 'locked' | 'owned' | 'funds'; error: string };
+/** Whether a player can buy an offer. The same rules run in the shop UI and, authoritatively, in the player's Durable Object. */
+export function checkPurchase(o: { level: number; price: number }, me: { level: number; bits: number; owned: boolean }): PurchaseCheck {
+  if (me.owned) return { ok: false, code: 'owned', error: 'Already in your wardrobe.' };
+  const lock = lockMessage(o.level, me.level);
+  if (lock) return { ok: false, code: 'locked', error: lock };
+  if (me.bits < o.price) {
+    const short = o.price - me.bits;
+    return { ok: false, code: 'funds', error: `You need ${short} more ${short === 1 ? CURRENCY.one : CURRENCY.many}.` };
+  }
+  return { ok: true };
+}
+
 /** A battle's bits for one side, before the daily taper. */
 export function battleBits(side: 0 | 1, outcome: 'win' | 'loss' | 'draw'): number {
   if (side === 1) return outcome === 'win' ? REWARDS.defendWin : 0;
