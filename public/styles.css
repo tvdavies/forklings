@@ -82,6 +82,14 @@ input.handle::placeholder{color:#9a8ab8}
 .card .whoc{color:var(--haze);font-size:14px}
 .card .traits{font-size:14px;color:var(--haze);margin-top:6px;line-height:1.4}
 .stars{font-family:var(--f-pixel);color:var(--butter);font-size:19px;letter-spacing:2px}
+.hatch-head{display:flex;align-items:center;gap:10px;margin-bottom:.35em}
+.hatch-head h2{margin:0}
+.info{position:relative;flex:none;width:30px;height:30px;margin:6px;padding:0;border:0;cursor:pointer;font:700 17px/1 var(--f-pixel);color:var(--haze);background:var(--dusk2);--bc:var(--dusk3);box-shadow:var(--ring)}
+.info::after{content:"";position:absolute;inset:-7px}
+.info[aria-expanded=true]{color:var(--ink);background:var(--butter)}
+.card .rarity{font:600 15px/1 var(--f-pixel);color:var(--rc);padding:5px 7px 6px;margin:4px;--bc:var(--rc);box-shadow:var(--ring);white-space:nowrap}
+.card .typeline{font-size:15px;color:var(--moon);margin:4px 0 2px}
+.hatch-wrap .toastline{text-align:center}
 
 /* home */
 .home-grid,.battle-grid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:28px;align-items:start}
@@ -214,6 +222,7 @@ input[type=range]{width:100%;max-width:420px;accent-color:var(--butter);height:2
   .tabs a{font-size:14px;padding:13px 2px}
   .card .traits{display:none}
   .card .nm{font-size:22px}
+  .card .typeline{font-size:14px}
   .stat{grid-template-columns:76px 1fr 40px}
 }
 @media (prefers-reduced-motion:reduce){.view{animation:none}.card{transition:opacity .2s}.bar i{transition:none}}

@@ -1,12 +1,13 @@
 // Forklings web client: a small hash-routed PWA over the JSON API.
 
-import { type BattleResult, fighter, HELD_EFFECTS, MOVES, type Snapshot, type Tactics } from '../shared/battle';
+import { type BattleResult, fighter, HELD_EFFECTS, MOVES, type Snapshot, strongAgainst, type Tactics, TYPE_EDGE } from '../shared/battle';
 import { ITEMS, SLOTS } from '../shared/compose';
 import { describe, type Genome, genome, RARITY, RCOL, STAGE_NAMES } from '../shared/genome';
 import { advance, type PetState, STAGE_XP } from '../shared/state';
 import { battleVerdict } from '../shared/verdict';
 import { itemIcon, paintStatic, RM, spr } from './engine';
 import { makeBattle, makeEvo, makeHatch, makeHome } from './scenes';
+import { copyPicture, hatchPicture } from './share';
 
 // ---------- API shapes (the fields of the Worker's JSON responses that the client reads) ----------
 interface Session {
@@ -241,9 +242,11 @@ async function initLogin() {
 }
 
 // ---------- hatch ----------
+/** One line on what a type means in battle, such as "Markup type: hits Data types 15% harder". */
+const typeLine = (type: string) => `${type} type: hits ${strongAgainst(type)} types ${Math.round((TYPE_EDGE - 1) * 100)}% harder`;
 function cardHTML(g: Genome) {
-  return `<div class="rowc"><span class="nm">${esc(g.name)}</span><span class="stars" title="${RARITY[g.rarity]}" style="color:${RCOL[g.rarity]}">${'★'.repeat(g.rarity + 1)}${'☆'.repeat(4 - g.rarity)}</span></div>
-  <div class="rowc"><span class="whoc">Hatched by @${esc(S.me!.session.handle)}</span><span class="whoc">${RARITY[g.rarity]} ${g.type} type</span></div><div class="traits">${esc(describe(g))}</div>`;
+  return `<div class="rowc"><span class="nm">${esc(g.name)}</span><span class="rarity" style="--rc:${RCOL[g.rarity]}">${RARITY[g.rarity]} <span aria-hidden="true">${'★'.repeat(g.rarity + 1)}</span></span></div>
+  <div class="typeline">${typeLine(g.type)}</div><div class="whoc">Hatched by @${esc(S.me!.session.handle)}</div><div class="traits">${esc(describe(g))}</div>`;
 }
 function initHatch() {
   // Before hatching, the egg is a neutral placeholder: the real seed doesn't exist until you press Hatch.
@@ -252,10 +255,23 @@ function initHatch() {
   const hatchStage = makeHatch($<HTMLCanvasElement>('hatchCanvas'), {
     g: placeholder,
     onHatched: (g) => {
+      $('hatchTitle').textContent = `Meet ${g.name}`;
       $('hatchCard').innerHTML = cardHTML(g);
       $('hatchCard').classList.add('show');
       $('meetBtn').hidden = false;
+      $('copyPic').hidden = false;
     },
+  });
+  $('hatchInfo').addEventListener('click', () => {
+    const open = $('hatchWhy').hidden;
+    $('hatchWhy').hidden = !open;
+    $('hatchInfo').setAttribute('aria-expanded', String(open));
+  });
+  $('copyPic').addEventListener('click', async () => {
+    const g = S.g!;
+    const how = await copyPicture(hatchPicture(g, S.me!.session.handle, typeLine(g.type)), `${g.name}.png`).catch(() => null);
+    $('hatchMsg').textContent =
+      how === 'copied' ? 'Copied. Paste it anywhere.' : how === 'saved' ? `Saved as ${g.name}.png` : "Couldn't make the picture.";
   });
   $('hatchBtn').addEventListener('click', async () => {
     $<HTMLButtonElement>('hatchBtn').disabled = true;
@@ -391,9 +407,9 @@ function startEvolution() {
   const before = fighter({ seed: c.seed, stage: from, level: c.level, tactics: c.tactics, items: c.items } as Snapshot),
     after = fighter({ seed: c.seed, stage: to, level: c.level, tactics: c.tactics, items: c.items } as Snapshot);
   const chips: [string, string][] = [
+    [`${S.g!.name} is now a ${STAGE_NAMES[to]}`, '#ffd166'],
     [`+${after.maxHp - before.maxHp} HP`, '#6fdc9c'],
     [`+${Math.round(after.atk - before.atk)} Attack`, '#ff6f62'],
-    [`Now a ${STAGE_NAMES[to]}`, '#ffd166'],
   ];
   // A modal moment: the page behind can't be reached until the player closes it.
   const back = document.activeElement as HTMLElement | null;
