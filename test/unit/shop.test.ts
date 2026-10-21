@@ -1,63 +1,86 @@
-// The nightly shop generator: deterministic, distinct from everything before it, priced and
-// locked by rarity, compactly stored, and visible on the creatures that will wear it.
+// The nightly shop generator: deterministic, distinct from everything on the shelf and from
+// the last month, never an exact repeat, bounded in cost, priced and locked by rarity,
+// compactly stored, and visible on the creatures that will wear it.
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { HELD_CAP_PCT, heldEffect } from '../../src/shared/battle';
+import { CLASSIC_LOOKS, classicLooks } from '../../src/shared/classic-looks';
 import { compose, ITEMS, noItems, type Px } from '../../src/shared/compose';
-import {
-  decodeLook,
-  encodeLook,
-  lookOf,
-  MIN_DISTANCE_EVER,
-  MIN_ITEM_DISTANCE,
-  nearDuplicate,
-  RECENT_DAYS,
-} from '../../src/shared/distinct';
+import { decodeLook, encodeLook, lookDistance, lookOf, MIN_ITEM_DISTANCE, nearDuplicate, RECENT_DAYS } from '../../src/shared/distinct';
 import { basePrice, CLASSICS, HELD_PCT, LEVEL_RANGE, utcDay } from '../../src/shared/economy';
 import { genome } from '../../src/shared/genome';
 import { sha256Hex } from '../../src/shared/rng';
 import {
   BABY_SLOTS,
+  BACK_CANDIDATES,
+  type Day,
+  drawKey,
   type Existing,
   type GenItem,
   generateDay,
   ITEM_PALETTE,
   ITEMS_PER_DAY,
   loadDef,
+  lookKey,
+  RESURFACE_COOLDOWN_DAYS,
+  RESURFACED_PER_DAY,
   resurface,
   shopSeed,
   storeDef,
 } from '../../src/shared/shopgen';
 
 const SALT = 'unit-test-salt';
-const DAYS = 21;
+/** Long enough that the first nights fall out of the recent window. */
+const DAYS = 40;
 const D0 = Date.UTC(2026, 9, 21);
+const dayN = (d: number) => utcDay(D0 + d * 86400e3);
 const classics = (): Existing[] =>
-  Object.keys(CLASSICS).map((id) => ({ id, slot: ITEMS[id].slot, look: lookOf(ITEMS[id]), name: ITEMS[id].name }));
+  Object.keys(CLASSICS).map((id) => ({ id, slot: ITEMS[id].slot, look: classicLooks()[id], name: ITEMS[id].name }));
 
-/** Three weeks of nights, generated the way the Worker does: each night sees every earlier item and the classics. */
-const run: { day: string; items: GenItem[] }[] = [];
+/**
+ * Forty nights, generated the way the Worker does (src/worker/shop.ts): each night sees the
+ * classics, the last month's items in full, every earlier item's draw key, and returning
+ * candidates in the seed's order from those not shelved in the last week.
+ */
+const run: { day: string; items: GenItem[]; back: string[]; input: Parameters<typeof generateDay> }[] = [];
 const made: Existing[] = [];
+const byId = new Map<string, Existing>();
 beforeAll(async () => {
-  const existing = classics();
   for (let d = 0; d < DAYS; d++) {
-    const day = utcDay(D0 + d * 86400e3);
-    const { items } = generateDay(await shopSeed(day, SALT), day, existing);
-    run.push({ day, items });
-    for (const it of items) {
-      const e = { id: it.id, slot: it.def.slot, look: lookOf(it.def), day, name: it.def.name };
-      existing.push(e);
+    const day = dayN(d);
+    const seed = await shopSeed(day, SALT);
+    const since = dayN(d - RECENT_DAYS),
+      cooldown = dayN(d - RESURFACE_COOLDOWN_DAYS);
+    const shelved = new Set(run.filter((r) => r.day >= cooldown).flatMap((r) => [...r.items.map((i) => i.id), ...r.back]));
+    const order = resurface(
+      seed,
+      made.map((e) => e.id),
+      shelved,
+      BACK_CANDIDATES,
+    );
+    const input: Parameters<typeof generateDay> = [
+      seed,
+      day,
+      [...classics(), ...made.filter((e) => e.day! >= since)],
+      { seen: new Map(made.flatMap((e) => e.keys!.map((k) => [k, e.id] as const))), back: order.map((id) => byId.get(id)!) },
+    ];
+    const night: Day = generateDay(...input);
+    run.push({ day, items: night.items, back: night.back, input });
+    for (const it of night.items) {
+      const e = { id: it.id, slot: it.def.slot, look: it.look, day, name: it.def.name, keys: it.keys };
       made.push(e);
+      byId.set(it.id, e);
     }
   }
 });
 const all = () => run.flatMap((r) => r.items);
 
 describe('generation', () => {
-  test('is deterministic: the same night, salt and history give identical items', async () => {
-    const day = run[5].day;
-    const history = [...classics(), ...made.filter((e) => e.day! < day)];
-    const again = generateDay(await shopSeed(day, SALT), day, history).items;
-    expect(again).toEqual(run[5].items);
+  test('is deterministic: the same night, salt and history give identical items and returns', async () => {
+    for (const n of [5, 35]) {
+      const again = generateDay(...run[n].input);
+      expect(again.items).toEqual(run[n].items);
+      expect(again.back).toEqual(run[n].back);
+    }
   });
   test('depends on the secret salt, so nobody can compute tomorrow', async () => {
     const day = run[0].day;
@@ -92,19 +115,50 @@ describe('generation', () => {
   test('only paints with the game palette', () => {
     for (const it of all()) for (const c of lookOf(it.def).cols) if (c) expect(ITEM_PALETTE.has(c)).toBe(true);
   });
+  test('carries the look and keys it is stored with', () => {
+    for (const it of all()) {
+      const stored = loadDef(storeDef(it.def));
+      expect(it.look).toEqual(lookOf(stored));
+      expect(it.keys).toEqual([drawKey(stored), lookKey(it.def.slot, lookOf(stored))]);
+    }
+  });
 });
 
 describe('distinctness', () => {
-  test(`each item differs from the classics and the last ${RECENT_DAYS} days in its slot, and from everything ever made`, () => {
+  test(`each item differs from the classics, the last ${RECENT_DAYS} days and tonight's shelf in its slot`, () => {
     for (const r of run)
       for (const it of r.items) {
-        const look = lookOf(it.def);
         const since = utcDay(Date.parse(`${r.day}T00:00:00Z`) - RECENT_DAYS * 86400e3);
-        const before = made.filter((e) => e.slot === it.def.slot && e.id < it.id);
-        const recent = [...classics().filter((e) => e.slot === it.def.slot), ...before.filter((e) => e.day! >= since)];
-        expect(nearDuplicate(look, recent, MIN_ITEM_DISTANCE)).toBeNull();
-        expect(nearDuplicate(look, before, MIN_DISTANCE_EVER)).toBeNull();
+        const compared = [
+          ...classics(),
+          ...made.filter((e) => e.id < it.id && e.day! >= since),
+          ...r.back.map((id) => byId.get(id)!),
+        ].filter((e) => e.slot === it.def.slot);
+        expect(nearDuplicate(it.look, compared, MIN_ITEM_DISTANCE)).toBeNull();
       }
+  });
+  test("everything on a night's shelf differs from everything else on it, and no two share a name", () => {
+    for (const r of run) {
+      const shelf = [...r.items.map((i) => byId.get(i.id)!), ...r.back.map((id) => byId.get(id)!), ...classics()];
+      for (const [i, a] of shelf.entries())
+        for (const b of shelf.slice(i + 1)) {
+          if (a.slot === b.slot) expect(lookDistance(a.look, b.look).pixel).toBeGreaterThanOrEqual(MIN_ITEM_DISTANCE);
+          expect(a.name?.toLowerCase()).not.toBe(b.name?.toLowerCase());
+        }
+    }
+  });
+  test('no item ever draws exactly like an earlier one', () => {
+    expect(new Set(made.flatMap((e) => e.keys)).size).toBe(2 * made.length);
+    const looks = new Set(made.map((e) => encodeLook(e.look)));
+    expect(looks.size).toBe(made.length);
+  });
+  test('a drawing seen before is refused and replaced from the same stream', () => {
+    const r = run[3];
+    const [seed, day, existing, opts] = r.input;
+    const seen = new Map([...(opts?.seen ?? []), ...r.items.flatMap((i) => i.keys.map((k) => [k, i.id] as [string, string]))]);
+    const again = generateDay(seed, day, existing, { ...opts, seen });
+    for (const it of again.items) expect(r.items.some((i) => encodeLook(i.look) === encodeLook(it.look))).toBe(false);
+    expect(again.rejected.some((x) => x.why === 'repeat')).toBe(true);
   });
   test(`no two items in ${RECENT_DAYS} days share a name, and none takes a classic's`, () => {
     const named = [...classics(), ...made];
@@ -118,6 +172,27 @@ describe('distinctness', () => {
     const it = run[0].items[0];
     expect(nearDuplicate(lookOf(it.def), [{ id: it.id, look: lookOf(it.def) }])?.id).toBe(it.id);
   });
+  test('every classic has a look to compare with, and the precomputed looks match the art', () => {
+    for (const id of Object.keys(CLASSICS)) {
+      const look = lookOf(ITEMS[id], id);
+      expect(look.w).toBeGreaterThan(0);
+      // If this fails after changing a classic's art: bun scripts/classic-looks.ts && npm run format
+      expect(CLASSIC_LOOKS[id]).toBe(encodeLook(look));
+    }
+  });
+});
+
+describe('bounded cost', () => {
+  test('older items count only through their keys: full history gives the same night as the window', () => {
+    // The Worker reads looks for the last month only; handing the generator every look ever made must change nothing.
+    for (const n of [30, 39]) {
+      const [seed, day, existing, opts] = run[n].input;
+      const full = generateDay(seed, day, [...classics(), ...made.filter((e) => e.day! < day)], opts);
+      expect(full.items).toEqual(run[n].items);
+      expect(full.back).toEqual(run[n].back);
+      expect(existing.length).toBeLessThan(full.items.length + made.filter((e) => e.day! < day).length);
+    }
+  });
 });
 
 describe('rotation', () => {
@@ -130,6 +205,15 @@ describe('rotation', () => {
     expect(new Set(back).size).toBe(4);
     for (const id of back) expect(recent.has(id)).toBe(false);
     expect(resurface(1234, catalogue, new Set(catalogue))).toEqual([]);
+    // A longer draw starts with the same items, so the Worker can load a few spare candidates.
+    expect(resurface(1234, catalogue, recent, BACK_CANDIDATES).slice(0, 4)).toEqual(back);
+  });
+  test(`each night returns ${RESURFACED_PER_DAY} items once there are enough, plus one for each short slot`, () => {
+    for (const r of run.slice(10)) {
+      expect(r.back).toHaveLength(RESURFACED_PER_DAY + ITEMS_PER_DAY - r.items.length);
+      const cooldown = utcDay(Date.parse(`${r.day}T00:00:00Z`) - RESURFACE_COOLDOWN_DAYS * 86400e3);
+      for (const id of r.back) expect(byId.get(id)!.day! < cooldown).toBe(true);
+    }
   });
 });
 

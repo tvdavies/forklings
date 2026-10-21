@@ -73,37 +73,43 @@ The cron `5 0 * * *` builds the day's shelf (`ensureShopDay` in `src/worker/shop
 
 **Generation.** Each candidate comes from one of 30 archetypes (beanie, top hat, hard hat, lens styles, scarf, lanyard, medal, hoodie, cape, wings, tutu, backpack, mug, laptop, plant, donut and more). Colours come only from the creature palette ramps, ink, cream and a white glint; epic items use the gold ramp for their accent. Patterns get likelier with rarity, and names are made from the ramp name, the pattern and the noun ("Frost checked top hat"). Nothing comes from an image model or an LLM.
 
-**Distinctness.** Every candidate is drawn alone on the mannequin, then outlined and cropped (`lookOf`). It's compared with every item in its slot. The distance runs from 0 (identical) to 1: the mean per-pixel difference over the union of the two looks. A pixel present in only one look scores 1, a shared pixel scores its CIE76 colour difference ÷ 60 (capped at 1), and outline that's in both looks is ignored. The candidate is nudged up to a pixel each way to find the best alignment.
+**Distinctness.** Every candidate is drawn alone on the mannequin, then outlined and cropped (`lookOf`). It's compared with the items in its slot that matter tonight (below). The distance runs from 0 (identical) to 1: the mean per-pixel difference over the union of the two looks. A pixel present in only one look scores 1, a shared pixel scores its CIE76 colour difference ÷ 60 (capped at 1), and outline that's in both looks is ignored. The candidate is nudged up to a pixel each way to find the best alignment.
 
 | Compared with | Must be at least | Why |
 | --- | --- | --- |
-| The classics and items from the last 28 days (`RECENT_DAYS`) | 0.2 (`MIN_ITEM_DISTANCE`) | A month's shop shows a different shape or pattern, or the same shape in clearly different colours. |
-| Every item ever made | 0.1 (`MIN_DISTANCE_EVER`) | No clones, no recolour into a neighbouring ramp and no one-pixel tweaks, ever. |
-| Names from the last 28 days and the classics | Not equal | Two "Cocoa tutu"s in a week read as the same item, however different they look. |
+| The classics, items from the last 28 days (`RECENT_DAYS`) and tonight's returning items | 0.2 (`MIN_ITEM_DISTANCE`) | Everything on sale at once, and everything in a month's shop, differs in shape or pattern, or has the same shape in clearly different colours. |
+| Every item ever made | Not an exact repeat (`drawKey`, `lookKey`) | No item is ever made twice. |
+| Names from the last 28 days, tonight's returning items and the classics | Not equal | Two "Cocoa tutu"s in a week read as the same item, however different they look. |
+
+The exact-repeat rule uses two short hashes stored with each item: `draw_key`, of exactly what the item is drawn from, and `look_key`, of the drawn look, because two different definitions can come out pixel for pixel the same. A candidate is checked by name and `drawKey` before it's drawn, so those refusals cost almost nothing.
 
 A rejected candidate is replaced by another from the same seeded stream, with up to 40 tries per slot (`MAX_ATTEMPTS`). If a slot runs out of tries, it is left empty for that night and one more older item is brought back to fill the gap.
 
-**Coming back.** Each night also brings back four older items (`RESURFACED_PER_DAY`), chosen by the seed from those that haven't been on the shelf in the last seven days. They're tagged *Back*. A purchase in the first ten minutes after midnight can still use the previous shelf, so a page left open over 00:00 doesn't fail.
+**Why a bounded set.** The first version also held every new item 0.1 away from everything ever made. That made a night's cost grow with the whole catalogue (about 0.28 s of CPU after a year and rising) and ran slots dry faster. The guarantee players can see is that nothing on sale looks like anything else on sale and a month of shops doesn't repeat itself; the bounded rule gives exactly that, plus no exact repeat ever. An item made more than 28 days ago can now have a near lookalike (closer than 0.2, never identical) in a later month, but the two are never on the shelf together.
+
+**Coming back.** Each night also brings back four older items (`RESURFACED_PER_DAY`), chosen by the seed from those that haven't been on the shelf in the last seven days. They're tagged *Back*. Returning items are chosen before the new ones: each must be 0.2 away from the classics, the last 28 days and the other returning items, and its name must be free. The Worker loads the first 30 in the seed's order (`BACK_CANDIDATES`) and takes those that pass. A purchase in the first ten minutes after midnight can still use the previous shelf, so a page left open over 00:00 doesn't fail.
 
 **Fit.** Every item is drawn onto real creatures in the tests. Each one must show on at least 97% of creatures at the stages that show its slot, and it can't change any pixel more than one pixel away from itself. A one-pixel outline seam can open at the edge. Any head item hides a crest (fins and sprouts), as hats always have. Neck and held items appear from the first evolution, and the fitting room tells a stage-0 player so. A held item's battle edge still applies before it shows.
 
 ## Capacity and CPU
 
-Measured with `generateDay` running 400 nights from 22 October 2026, each night seeing the whole catalogue before it, with Bun on the dev host:
+`bun scripts/shop-bench.ts [nights]` simulates nights from 22 October 2026 the way `ensureShopDay` does, with the D1 rows in memory, and times each night's CPU: decoding the 28-day window and the key index, choosing returning items, generating, and encoding what's stored. D1 round trips are I/O and aren't counted. Under Node (V8, the engine Workers use) on the dev host:
 
-| Night | Catalogue | Generation time |
-| --- | --- | --- |
-| 1 | 18 | 17 ms (first-call warm-up) |
-| 30 | 192 | 11 ms |
-| 90 | 552 | 49 ms |
-| 180 | 1,087 | 54 ms |
-| 365 | 2,015 | 228 ms |
-| 400 | 2,156 | 355 ms (worst night: 495 ms) |
+| Night | Catalogue | Steady state | Cold isolate |
+| --- | --- | --- | --- |
+| 30 | 180 | 10 ms | 47 ms |
+| 180 | 1,080 | 10 ms | 53 ms |
+| 365 | 2,137 | 10 ms | 66 ms |
+| 400 | 2,315 | 10 ms (worst night 24 ms) | |
+| 730 | 3,538 | 10 ms (worst night 27 ms) | |
 
-- **Running dry.** The design space starts running out in some slots after about four months. Body slots first came up short on night 151, neck on night 172, held on night 217 and face on night 263. Across 400 nights, 256 of 2,400 slots (11%) came up short, all filled by resurfaced items, so the shelf never shrank. Without the name rule it was 226 slots, so names cost about 30 slots a year. When the shortfall matters, add archetypes or styles in the slots that run dry and bump `SHOP_GEN_VERSION`.
-- **Cost growth.** Cost grows with the catalogue in each slot and with the number of tries. Most time goes to slots that try all 40 candidates. Two cheap bounds keep this down without changing any decision. A size difference can rule out a pair, and a comparison stops as soon as its cost proves it is over the threshold. Together they made a year in about a quarter of the time.
-- **Worker load.** Each night the Worker also reads the whole catalogue from D1 (`id, slot, day, look, def`, about 330 bytes a row locally) and decodes it. That's about 0.7 MB after a year.
-- **Plan assumption.** This assumes the Workers Paid plan, where a Cron invocation and a request each get at least 30 s of CPU ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/)). On the Free plan's 10 ms CPU limit, generation would fail from the first night. The cron does it once a day, and a request does it only when the cron hasn't run yet.
+The cold column is one night in a fresh process, as a once-a-day cron usually gets; most of it is the JavaScript engine warming up, not the catalogue. For comparison, the first version took 280 ms steady-state and 530 ms cold at night 365, and was still climbing. Two changes did it: the bounded comparison set, and precomputed features. Each look is turned once into an array of colour ids with a table of colour distances, the classics' looks are precomputed in `src/shared/classic-looks.ts`, and the per-pixel outline pass in `compose` no longer allocates. That last one makes every sprite draw about three times faster, with identical pixels.
+
+Run end to end in `wrangler dev` against a local D1 seeded with 365 nights (2,130 items), the cron made the night in 93 ms of wall time, D1 included.
+
+- **What still grows.** The Worker reads `id, draw_key, look_key` for every item (about 40 bytes a row, 90 KB after a year) and builds a lookup from it. That's well under a millisecond a night at a year and stays small. Everything else it reads (the last 28 days, up to 30 returning candidates) is bounded.
+- **Running dry.** The exact-repeat rule slowly uses up each slot's design space. Over 400 nights 85 of 2,400 slots (3.5%) came up short, against 11% with the old rule; over two years it's 842 of 4,380 (19%). Returning items fill every gap, so the shelf never shrinks. When the shortfall matters, add archetypes or styles in the slots that run dry and bump `SHOP_GEN_VERSION`.
+- **Plan.** Generation needs more than the Workers Free plan's 10 ms of CPU, so the shop needs Workers Paid, where a daily Cron Trigger gets 15 minutes of CPU and a request 30 seconds by default ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/)). The cron does it once a day, and a request does it only when the cron hasn't run yet.
 
 ## House NPCs
 
@@ -142,7 +148,8 @@ SELECT held, AVG(won) AS win_rate, COUNT(*) AS n FROM battle_sides WHERE won IS 
 
 ## Operations
 
-- **Migrations.** `migrations/0004_shop.sql` adds `shop_items`, `shop_days`, `bits_events` and `battle_sides.body`. Player wallets create their own tables when first opened.
+- **Migrations.** `migrations/0004_shop.sql` adds `shop_items` (with `draw_key` and `look_key`), `shop_days`, `bits_events` and `battle_sides.body`. Player wallets create their own tables when first opened.
+- **Changing a classic's art.** Run `bun scripts/classic-looks.ts && npm run format` to refresh the precomputed looks; a unit test fails until you do.
 - **Changing the generator.** Bump `SHOP_GEN_VERSION` whenever it changes its output for a seed. Stored days and items are never regenerated, and each item's version is kept in `shop_items.gen_version`.
 - **Remaking a day locally:**
 

@@ -2,16 +2,18 @@
 // missed, the first shop visit of the day does the same work and gets the same result
 // (generation is deterministic in the day, the secret salt and the catalogue so far, and
 // every write is INSERT OR IGNORE, so racing generators agree).
+
+import { classicLooks } from '../shared/classic-looks';
 import { ITEMS, type ItemDef, type Slot } from '../shared/compose';
-import { decodeLook, encodeLook, lookOf } from '../shared/distinct';
+import { decodeLook, encodeLook, RECENT_DAYS } from '../shared/distinct';
 import { CLASSICS, classicOffers, type Offer, prevDay, utcDay } from '../shared/economy';
 import { sha256Hex } from '../shared/rng';
 import {
+  BACK_CANDIDATES,
   type Existing,
   generateDay,
   loadDef,
   RESURFACE_COOLDOWN_DAYS,
-  RESURFACED_PER_DAY,
   resurface,
   SHOP_GEN_VERSION,
   shopSeed,
@@ -25,6 +27,7 @@ export const ROLLOVER_GRACE_MS = 10 * 60 * 1000;
 type ShelfEntry = { id: string; tag: 'new' | 'back' };
 type DayRow = { day: string; items: string; made: number; rejected: number; short: number; ms: number };
 type CatalogueRow = { id: string; slot: Slot; day: string; look: string; def: string };
+type KeyRow = { id: string; draw_key: string; look_key: string };
 type ItemRow = { id: string; day: string; level: number; price: number; def: string };
 
 export interface ShopDay {
@@ -55,40 +58,70 @@ async function readDay(env: Env, day: string): Promise<ShopDay | null> {
   return r ? parseDay(r) : null;
 }
 
-let classicLooks: Existing[] | null = null;
-/** The classics count as existing items: nothing generated may look like them either. */
+let classicEntries: Existing[] | null = null;
+/** The classics count as existing items: nothing generated may look like them either. Their looks are precomputed. */
 function classics(): Existing[] {
-  classicLooks ??= Object.keys(CLASSICS).map((id) => ({ id, slot: ITEMS[id].slot, look: lookOf(ITEMS[id]), name: ITEMS[id].name }));
-  return classicLooks;
+  classicEntries ??= Object.keys(CLASSICS).map((id) => ({ id, slot: ITEMS[id].slot, look: classicLooks()[id], name: ITEMS[id].name }));
+  return classicEntries;
 }
 
-/** Make `day`'s items and shelf unless they exist already. Returns the day as stored. */
+const toExisting = (r: CatalogueRow): Existing => ({
+  id: r.id,
+  slot: r.slot,
+  day: r.day,
+  look: decodeLook(r.look),
+  name: loadDef(r.def).name,
+});
+
+/**
+ * Make `day`'s items and shelf unless they exist already. Returns the day as stored.
+ *
+ * Only a bounded set is read in full (looks and definitions): the last `RECENT_DAYS` of items
+ * and the returning candidates. The rest of the catalogue is read as ids and draw keys only,
+ * for the exact-repeat rule and the choice of returning items, so a night's CPU stays about
+ * flat as the catalogue grows (docs/economy.md, "Capacity and CPU").
+ */
 export async function ensureShopDay(env: Env, day: string, now = Date.now()): Promise<ShopDay> {
   const have = await readDay(env, day);
   if (have) return have;
   const t0 = Date.now();
-  const rows = (await env.DB.prepare('SELECT id, slot, day, look, def FROM shop_items WHERE day < ?').bind(day).all<CatalogueRow>())
-    .results;
-  const existing: Existing[] = [
-    ...classics(),
-    ...rows.map((r) => ({ id: r.id, slot: r.slot, day: r.day, look: decodeLook(r.look), name: loadDef(r.def).name })),
-  ];
+  const dayMs = Date.parse(`${day}T00:00:00Z`);
+  const since = utcDay(dayMs - RECENT_DAYS * 86400e3),
+    cooldown = utcDay(dayMs - RESURFACE_COOLDOWN_DAYS * 86400e3);
+  const [keys, recentRows, recentDays] = await env.DB.batch([
+    env.DB.prepare('SELECT id, draw_key, look_key FROM shop_items WHERE day < ?').bind(day),
+    env.DB.prepare('SELECT id, slot, day, look, def FROM shop_items WHERE day >= ? AND day < ?').bind(since, day),
+    env.DB.prepare('SELECT items FROM shop_days WHERE day >= ? AND day < ?').bind(cooldown, day),
+  ]);
+  const index = keys.results as KeyRow[];
+  const recent = (recentRows.results as CatalogueRow[]).map(toExisting);
   const seed = await shopSeed(day, await shopSalt(env));
-  const { items, rejected } = generateDay(seed, day, existing);
-  const short = Math.max(0, 6 - items.length);
 
-  // Bring back older items that haven't been on the shelf for a week; one more for each slot that came up short.
-  const since = utcDay(Date.parse(`${day}T00:00:00Z`) - RESURFACE_COOLDOWN_DAYS * 86400e3);
-  const recentDays = (
-    await env.DB.prepare('SELECT items FROM shop_days WHERE day >= ? AND day < ?').bind(since, day).all<{ items: string }>()
-  ).results;
-  const recent = new Set<string>(recentDays.flatMap((r) => (JSON.parse(r.items) as ShelfEntry[]).map((e) => e.id)));
-  const back = resurface(
-    seed,
-    rows.map((r) => r.id),
-    recent,
-    RESURFACED_PER_DAY + short,
+  // Older items that could come back: not on the shelf in the last week, in the seed's order.
+  const shelved = new Set<string>(
+    (recentDays.results as { items: string }[]).flatMap((r) => (JSON.parse(r.items) as ShelfEntry[]).map((e) => e.id)),
   );
+  const order = resurface(
+    seed,
+    index.map((r) => r.id),
+    shelved,
+    BACK_CANDIDATES,
+  );
+  const loaded = new Map(recent.map((e) => [e.id, e]));
+  const missing = order.filter((id) => !loaded.has(id));
+  if (missing.length) {
+    const more = await env.DB.prepare(`SELECT id, slot, day, look, def FROM shop_items WHERE id IN (${missing.map(() => '?').join(',')})`)
+      .bind(...missing)
+      .all<CatalogueRow>();
+    for (const r of more.results) loaded.set(r.id, toExisting(r));
+  }
+  const candidates = order.flatMap((id) => loaded.get(id) ?? []);
+
+  const { items, rejected, back } = generateDay(seed, day, [...classics(), ...recent], {
+    seen: new Map(index.flatMap((r) => [[r.draw_key, r.id] as const, [r.look_key, r.id] as const])),
+    back: candidates,
+  });
+  const short = Math.max(0, 6 - items.length);
   const shelf: ShelfEntry[] = [
     ...items.map((i) => ({ id: i.id, tag: 'new' as const })),
     ...back.map((id) => ({ id, tag: 'back' as const })),
@@ -97,8 +130,8 @@ export async function ensureShopDay(env: Env, day: string, now = Date.now()): Pr
 
   const stmts = items.map((i) =>
     env.DB.prepare(
-      'INSERT OR IGNORE INTO shop_items (id, day, slot, arch, rarity, level, price, gen_version, def, look) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    ).bind(i.id, day, i.def.slot, i.arch, i.def.rarity, i.level, i.price, SHOP_GEN_VERSION, storeDef(i.def), encodeLook(lookOf(i.def))),
+      'INSERT OR IGNORE INTO shop_items (id, day, slot, arch, rarity, level, price, gen_version, def, look, draw_key, look_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    ).bind(i.id, day, i.def.slot, i.arch, i.def.rarity, i.level, i.price, SHOP_GEN_VERSION, storeDef(i.def), encodeLook(i.look), ...i.keys),
   );
   stmts.push(
     env.DB.prepare('INSERT OR IGNORE INTO shop_days (day, items, made, rejected, short, ms, at) VALUES (?,?,?,?,?,?,?)').bind(

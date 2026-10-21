@@ -92,4 +92,4 @@ Coaching tactics and [strategy scripts](strategy-scripts.md) both compile to the
 
 ## Costs
 
-Every request runs on the Workers plan the account already has. D1 rows are small, and reads stay within the included quota at hobby scale. An idle player does no work at all. The cron does a bounded amount of NPC work every 20 minutes. Making a night's shop items takes tens of milliseconds of CPU in the first months, and about a quarter of a second after a year. That needs the Workers Paid plan's CPU allowance, not the Free plan's 10 ms (see [economy.md](economy.md#capacity-and-cpu)).
+Every request runs on the Workers plan the account already has. D1 rows are small, and reads stay within the included quota at hobby scale. An idle player does no work at all. The cron does a bounded amount of NPC work every 20 minutes. Making a night's shop items takes about 10 ms of CPU in a warm isolate and 50–70 ms in a cold one, and stays about flat as the catalogue grows. That needs the Workers Paid plan's CPU allowance, not the Free plan's 10 ms (see [economy.md](economy.md#capacity-and-cpu)).

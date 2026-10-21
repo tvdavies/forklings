@@ -3,7 +3,9 @@
 -- what is shared between players or needed for balancing. See docs/economy.md.
 
 -- Every item the nightly generator has made. `def` is the compact drawing compose() needs
--- (a pixel map, or a few parameters); `look` its worn silhouette for the distinctness check.
+-- (a pixel map, or a few parameters); `look` its worn silhouette for the distinctness check,
+-- read only for the last 28 days and returning candidates. `draw_key` and `look_key` are short
+-- hashes of the drawing and the look, read for every item, so no item is ever repeated exactly.
 CREATE TABLE IF NOT EXISTS shop_items (
   id TEXT PRIMARY KEY,                -- g<yyyymmdd><a-h>, e.g. g20261021a
   day TEXT NOT NULL,                  -- UTC day it was made
@@ -14,9 +16,11 @@ CREATE TABLE IF NOT EXISTS shop_items (
   price INTEGER NOT NULL,             -- in bits
   gen_version INTEGER NOT NULL,
   def TEXT NOT NULL,
-  look TEXT NOT NULL
+  look TEXT NOT NULL,
+  draw_key TEXT NOT NULL,
+  look_key TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS shop_items_slot ON shop_items(slot, day);
+CREATE INDEX IF NOT EXISTS shop_items_day ON shop_items(day);
 
 -- One row per UTC day: what was on the shelf, and how generation went.
 CREATE TABLE IF NOT EXISTS shop_days (

@@ -3,8 +3,9 @@
 // the live shop uses a secret salt, so its items differ. Each row is a night; each cell is
 // the item's shop icon above it worn by three different Forklings.
 // Run with: bun scripts/shop-sheet.ts [days]   (writes docs/assets/shop-week.png, prints the week as a table)
+
+import { classicLooks } from '../src/shared/classic-looks';
 import { compose, ITEMS, itemIconCols, noItems, type Px } from '../src/shared/compose';
-import { lookOf } from '../src/shared/distinct';
 import { CLASSICS, utcDay } from '../src/shared/economy';
 import { genome } from '../src/shared/genome';
 import { encodePng } from '../src/shared/png';
@@ -40,7 +41,7 @@ const wearers = await Promise.all([0, 1, 2, 3, 4, 5].map((i) => sha256Hex(`sheet
 const existing: Existing[] = Object.keys(CLASSICS).map((id) => ({
   id,
   slot: ITEMS[id].slot,
-  look: lookOf(ITEMS[id]),
+  look: classicLooks()[id],
   name: ITEMS[id].name,
 }));
 const lines = ['| Night | Item | Slot | Rarity | Level | Price | Battle |', '| --- | --- | --- | --- | --- | --- | --- |'];
@@ -48,7 +49,7 @@ for (let d = 0; d < DAYS; d++) {
   const day = utcDay(START + d * 86400e3);
   const { items, rejected } = generateDay(await shopSeed(day, SALT), day, existing);
   items.forEach((it, k) => {
-    existing.push({ id: it.id, slot: it.def.slot, look: lookOf(it.def), day, name: it.def.name });
+    existing.push({ id: it.id, slot: it.def.slot, look: it.look, day, name: it.def.name, keys: it.keys });
     const x0 = PAD + k * CELL_W,
       y0 = PAD + d * CELL_H;
     rect(x0 + 4, y0 + 4, CELL_W - 8, CELL_H - 8, CARD);

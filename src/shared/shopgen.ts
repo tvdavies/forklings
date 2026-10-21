@@ -5,7 +5,7 @@
 // The same day, salt and existing catalogue always give the same items.
 
 import { type ItemDef, type ItemParams, type ParamKind, patternOn, type Slot, type Stat } from './compose';
-import { type Look, lookOf, MIN_DISTANCE_EVER, MIN_ITEM_DISTANCE, nearDuplicate, RECENT_DAYS } from './distinct';
+import { encodeLook, hash53, type Look, lookOf, MIN_ITEM_DISTANCE, nearDuplicate, RECENT_DAYS } from './distinct';
 import { basePrice, HELD_PCT, LEVEL_RANGE } from './economy';
 import { INK, PAIRS, RAMPS, RNAME } from './genome';
 import { mulberry, type Rng, seedToInt, sha256Hex } from './rng';
@@ -17,6 +17,8 @@ export const ITEMS_PER_DAY = 6;
 /** Older items brought back each day, chosen from those not on the shelf in the last week. */
 export const RESURFACED_PER_DAY = 4;
 export const RESURFACE_COOLDOWN_DAYS = 7;
+/** Returning candidates the Worker loads each night, in seeded order: enough to fill every gap after look checks. */
+export const BACK_CANDIDATES = 3 * (RESURFACED_PER_DAY + ITEMS_PER_DAY);
 /** Candidates tried per slot before giving up on that slot for the night. */
 export const MAX_ATTEMPTS = 40;
 /** Slots a stage-0 Forkling shows: neck and held items appear from the first evolution. */
@@ -34,6 +36,10 @@ export interface GenItem {
   def: ItemDef;
   level: number;
   price: number;
+  /** How it looks worn (for the distinctness check), as stored. */
+  look: Look;
+  /** Its `drawKey` and `lookKey`, as stored, for the exact-repeat rule. */
+  keys: [draw: string, look: string];
 }
 
 /** The secret-salted seed for a day. The salt never leaves the Worker, so nobody can preview tomorrow's shop. */
@@ -722,59 +728,123 @@ export interface Existing {
   day?: string;
   /** Its shop name. Two recent items may not share one, however different they look. */
   name?: string;
+  /** Its `drawKey` and `lookKey`, for the exact-repeat rule (generated items only). */
+  keys?: readonly string[];
 }
+
+/**
+ * Keys for the exact-repeat rule. `drawKey` hashes exactly what compose() draws an item from,
+ * so a repeat is refused before drawing it, for almost nothing; `lookKey` hashes the drawn look,
+ * since two different definitions can still come out pixel for pixel the same.
+ */
+export const drawKey = (d: ItemDef): string =>
+  `d${hash53(JSON.stringify([d.slot, d.map ?? null, d.cols ?? null, d.kind ?? null, d.p ?? null]))}`;
+export const lookKey = (slot: Slot, l: Look): string => `l${hash53(`${slot}|${encodeLook(l)}`)}`;
 export interface Rejection {
   slot: Slot;
   name: string;
+  /** `near`: looks too like `nearest`; `repeat`: draws exactly like it; `name`: takes its name. */
+  why: 'near' | 'repeat' | 'name';
   nearest: string;
   distance: number;
 }
 
+export interface DayOptions {
+  /**
+   * `drawKey` and `lookKey` to id for every item made before tonight, for the exact-repeat rule.
+   * The Worker reads these from D1 instead of every look; if absent, the keys in `existing` are used.
+   */
+  seen?: Map<string, string>;
+  /** Older items that could come back tonight, in the seeded order from `resurface`. */
+  back?: Existing[];
+}
+export interface Day {
+  items: GenItem[];
+  rejected: Rejection[];
+  /** Returning items for tonight's shelf: `RESURFACED_PER_DAY`, plus one for each slot that came up short. */
+  back: string[];
+}
+
 /**
- * Generate a night's items. Each candidate is drawn on the mannequin and compared with
- * existing items in its slot (and tonight's earlier picks): recent ones and the classics at
- * the strict threshold, older ones at the floor. A recent item's name can't be reused either
- * (two "Cocoa tutu"s in a week read as the same thing). Near-duplicates are rejected and
- * another candidate is drawn from the same seeded stream; a slot that finds nothing is skipped.
+ * Generate a night's items. Each candidate is drawn on the mannequin and compared with the
+ * items in its slot that matter tonight: the classics, items made in the last `RECENT_DAYS`,
+ * tonight's returning items and tonight's earlier picks, all at `MIN_ITEM_DISTANCE`. Its look
+ * may not repeat any item ever made, and a recent or returning item's name can't be reused
+ * (two "Cocoa tutu"s in a week read as the same thing). Rejected candidates are replaced from
+ * the same seeded stream; a slot that finds nothing is skipped.
+ *
+ * Only that bounded set is compared, so the cost doesn't grow with the catalogue: older
+ * entries in `existing` count only through their key, and give the same result as `seen`.
+ *
+ * Returning items are chosen first, from `back` in order: each must also be distinct from the
+ * recent items and from the others chosen, so everything on the shelf tonight differs.
  */
-export function generateDay(seed: number, day: string, existing: Existing[]): { items: GenItem[]; rejected: Rejection[] } {
+export function generateDay(seed: number, day: string, existing: Existing[], opts: DayOptions = {}): Day {
   const r = mulberry(seed ^ 0x5409);
   const items: GenItem[] = [];
   const rejected: Rejection[] = [];
   const since = Date.parse(`${day}T00:00:00Z`) - RECENT_DAYS * 86400e3;
   type Entry = { id: string; look: Look };
-  const bySlot = (): Record<Slot, Entry[]> => ({ head: [], face: [], neck: [], body: [], held: [] });
-  const pool = bySlot(),
-    old = bySlot();
+  const pool: Record<Slot, Entry[]> = { head: [], face: [], neck: [], body: [], held: [] };
   const recentNames = new Map<string, string>();
+  const seen = opts.seen ?? new Map<string, string>(),
+    tonight = new Map<string, string>();
   for (const e of existing) {
-    const recent = !e.day || Date.parse(`${e.day}T00:00:00Z`) >= since;
-    (recent ? pool : old)[e.slot].push(e);
-    if (recent && e.name) recentNames.set(e.name.toLowerCase(), e.id);
+    if (!opts.seen) for (const k of e.keys ?? []) seen.set(k, e.id);
+    if (e.day && Date.parse(`${e.day}T00:00:00Z`) < since) continue;
+    pool[e.slot].push(e);
+    if (e.name) recentNames.set(e.name.toLowerCase(), e.id);
   }
+
+  // Tonight's returning items, at most one for every slot that could come up short.
+  const back: string[] = [];
+  for (const c of opts.back ?? []) {
+    if (back.length >= RESURFACED_PER_DAY + ITEMS_PER_DAY) break;
+    const named = c.name ? recentNames.get(c.name.toLowerCase()) : undefined;
+    if (named && named !== c.id) continue;
+    if (nearDuplicate(c.look, othersThan(pool[c.slot], c.id), MIN_ITEM_DISTANCE)) continue;
+    back.push(c.id);
+    if (!pool[c.slot].some((e) => e.id === c.id)) pool[c.slot].push(c);
+    if (c.name) recentNames.set(c.name.toLowerCase(), c.id);
+  }
+
   const usedArch = new Set<string>();
   slotsFor(r).forEach((slot, i) => {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const { arch, def } = candidate(r, slot, usedArch);
       def.day = day;
-      const look = lookOf(def);
-      if (!look.w) continue;
+      // The cheap rules first: a name or a drawing seen before is refused without drawing it.
       const sameName = recentNames.get(def.name.toLowerCase());
       if (sameName) {
-        rejected.push({ slot, name: def.name, nearest: sameName, distance: 0 });
+        rejected.push({ slot, name: def.name, why: 'name', nearest: sameName, distance: 0 });
         continue;
       }
-      const near = nearDuplicate(look, pool[slot], MIN_ITEM_DISTANCE) ?? nearDuplicate(look, old[slot], MIN_DISTANCE_EVER);
+      const dk = drawKey(def);
+      const drawn = seen.get(dk) ?? tonight.get(dk);
+      if (drawn) {
+        rejected.push({ slot, name: def.name, why: 'repeat', nearest: drawn, distance: 0 });
+        continue;
+      }
+      const look = lookOf(def);
+      if (!look.w) continue;
+      const lk = lookKey(slot, look);
+      const same = seen.get(lk) ?? tonight.get(lk);
+      if (same) {
+        rejected.push({ slot, name: def.name, why: 'repeat', nearest: same, distance: 0 });
+        continue;
+      }
+      const near = nearDuplicate(look, pool[slot], MIN_ITEM_DISTANCE);
       if (near) {
-        rejected.push({ slot, name: def.name, nearest: near.id, distance: near.distance.pixel });
+        rejected.push({ slot, name: def.name, why: 'near', nearest: near.id, distance: near.distance.pixel });
         continue;
       }
       const id = `g${day.replace(/-/g, '')}${'abcdefgh'[i]}`;
       const [lo, hi] = LEVEL_RANGE[def.rarity];
       const level = lo + Math.floor(r() * (hi - lo + 1));
       const price = basePrice(def.rarity, slot) + 5 * Math.floor(r() * 3);
-      items.push({ id, day, arch: arch.id, def, level, price });
+      items.push({ id, day, arch: arch.id, def, level, price, look, keys: [dk, lk] });
       pool[slot].push({ id, look });
+      tonight.set(dk, id).set(lk, id);
       recentNames.set(def.name.toLowerCase(), id);
       usedArch.add(arch.id);
       break;
@@ -787,7 +857,11 @@ export function generateDay(seed: number, day: string, existing: Existing[]): { 
     const c = items.filter((i) => BABY_SLOTS.has(i.def.slot)).sort((a, b) => a.def.rarity - b.def.rarity)[0];
     if (c) c.level = 1;
   }
-  return { items, rejected };
+  return { items, rejected, back: back.slice(0, RESURFACED_PER_DAY + ITEMS_PER_DAY - items.length) };
+}
+
+function* othersThan(entries: { id: string; look: Look }[], id: string) {
+  for (const e of entries) if (e.id !== id) yield e;
 }
 
 /**

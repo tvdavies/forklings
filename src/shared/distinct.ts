@@ -7,16 +7,15 @@ import { INK } from './genome';
 /**
  * Distance is 0 for identical looks and 1 for looks that share no pixels. Two rules, both per slot:
  *
- * - Against every item ever made (and the classics), a new item must be at least
- *   `MIN_DISTANCE_EVER` away: no clones, no recolour into a neighbouring ramp, no one-pixel tweak.
- * - Against items made in the last `RECENT_DAYS`, it must be at least `MIN_ITEM_DISTANCE` away:
- *   a different shape or pattern, or the same shape in clearly different colours.
+ * - Against the classics, items made in the last `RECENT_DAYS` and everything else on tonight's
+ *   shelf, a new item must be at least `MIN_ITEM_DISTANCE` away: a different shape or pattern, or
+ *   the same shape in clearly different colours.
+ * - Against every item ever made, its drawing may not be an exact repeat (`drawKey` in shopgen).
  *
- * A single strict rule against all history runs the design space dry in a few months (see
- * docs/economy.md); this keeps every month's shop varied and still never repeats an item.
+ * The distance rule works on a bounded set, so a night's cost stays flat as the catalogue grows;
+ * the exact-repeat rule is a set lookup. See docs/economy.md for the numbers.
  */
 export const MIN_ITEM_DISTANCE = 0.2;
-export const MIN_DISTANCE_EVER = 0.1;
 export const RECENT_DAYS = 28;
 
 /** A worn look: cropped pixels plus its size. Stored compactly as a signature string. */
@@ -26,7 +25,8 @@ export interface Look {
   cols: Px[];
 }
 
-export const lookOf = (d: ItemDef): Look => itemWornCols(d);
+/** How an item looks worn. Pass a classic's id too: some classics are drawn by id, not from their definition. */
+export const lookOf = (d: ItemDef, id?: string): Look => itemWornCols(d, id);
 
 /** sRGB hex to CIELAB (D65). */
 export function lab(c: string): [number, number, number] {
@@ -61,15 +61,59 @@ export function colourDistance(a: string, b: string): number {
   return d;
 }
 
-const filledCache = new WeakMap<Look, number>();
-const filled = (l: Look) => {
-  let n = filledCache.get(l);
-  if (n === undefined) {
-    n = l.cols.reduce((k, c) => k + (c ? 1 : 0), 0);
-    filledCache.set(l, n);
+// Precomputed features, so a comparison is integer lookups: each look's pixels as colour ids
+// (0 empty, 1 ink) and its filled count, cached per look, plus a lazily filled table of
+// colour distances between ids. The values are exactly colourDistance's.
+const colourIds = new Map<string, number>([[INK, 1]]);
+const colourList = ['', INK];
+let cap = 64;
+let table = new Float64Array(cap * cap).fill(-1);
+function colourId(c: string): number {
+  let id = colourIds.get(c);
+  if (id === undefined) {
+    id = colourList.push(c) - 1;
+    colourIds.set(c, id);
+    if (id >= cap) {
+      const old = table,
+        was = cap;
+      cap *= 2;
+      table = new Float64Array(cap * cap).fill(-1);
+      for (let i = 0; i < was; i++) table.set(old.subarray(i * was, (i + 1) * was), i * cap);
+    }
   }
-  return n;
-};
+  return id;
+}
+function idDistance(i: number, j: number): number {
+  let d = table[i * cap + j];
+  if (d < 0) {
+    d = colourDistance(colourList[i], colourList[j]);
+    table[i * cap + j] = d;
+    table[j * cap + i] = d;
+  }
+  return d;
+}
+interface Features {
+  ids: Uint16Array;
+  filled: number;
+}
+const featureCache = new WeakMap<Look, Features>();
+function features(l: Look): Features {
+  let f = featureCache.get(l);
+  if (!f) {
+    const ids = new Uint16Array(l.cols.length);
+    let filled = 0;
+    l.cols.forEach((c, i) => {
+      if (c) {
+        ids[i] = colourId(c);
+        filled++;
+      }
+    });
+    f = { ids, filled };
+    featureCache.set(l, f);
+  }
+  return f;
+}
+const filled = (l: Look) => features(l).filled;
 
 export interface Distance {
   /**
@@ -97,6 +141,8 @@ export function lookDistance(a: Look, b: Look): Distance {
 function overlap(a: Look, b: Look, stop = 1): Omit<Distance, 'palette'> {
   let best = { pixel: 1, silhouette: 1 };
   if (!a.w || !b.w) return best;
+  const A = features(a).ids,
+    B = features(b).ids;
   const most = filled(a) + filled(b);
   const ax = 0,
     ay = 0,
@@ -116,15 +162,19 @@ function overlap(a: Look, b: Look, stop = 1): Omit<Distance, 'palette'> {
         gaveUp = false;
       const limit = Math.min(stop, best.pixel) * most;
       for (let y = y0; y < y1 && !gaveUp; y++) {
+        const inA = y >= ay && y < ay + a.h,
+          inB = y >= by && y < by + b.h,
+          rowA = (y - ay) * a.w - ax,
+          rowB = (y - by) * b.w - bx;
         for (let x = x0; x < x1; x++) {
-          const ca = x >= ax && x < ax + a.w && y >= ay && y < ay + a.h ? a.cols[(y - ay) * a.w + (x - ax)] : null;
-          const cb = x >= bx && x < bx + b.w && y >= by && y < by + b.h ? b.cols[(y - by) * b.w + (x - bx)] : null;
+          const ca = inA && x >= ax && x < ax + a.w ? A[rowA + x] : 0;
+          const cb = inB && x >= bx && x < bx + b.w ? B[rowB + x] : 0;
           // Shared outline says nothing about the drawing itself; mismatched outline still counts.
-          if ((!ca && !cb) || (ca === INK && cb === INK)) continue;
+          if ((!ca && !cb) || (ca === 1 && cb === 1)) continue;
           union++;
           if (ca && cb) {
             inter++;
-            cost += colourDistance(ca, cb);
+            if (ca !== cb) cost += idDistance(ca, cb);
           } else cost += 1;
         }
         gaveUp = cost >= limit;
@@ -194,6 +244,19 @@ export function encodeLook(l: Look): string {
     return i.toString(36);
   });
   return `${l.w}x${l.h}|${pal.map((c) => c.slice(1)).join(',')}|${idx.join('')}`;
+}
+/** A short, stable 53-bit hash of a string, in base 36 (cyrb53). */
+export function hash53(s: string): string {
+  let h1 = 0xdeadbeef,
+    h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
 export function decodeLook(s: string): Look {
   const [size, pal, px] = s.split('|');
