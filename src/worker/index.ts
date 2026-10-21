@@ -11,6 +11,7 @@ import type { CareAction } from '../shared/state';
 import { cookie, getCookie, randomToken, SESSION_DAYS, type Session, sha256b64, signSession, verifySession } from './auth';
 import type { BattleOutcome } from './battle';
 import type { Env } from './env';
+import { leaderboard } from './leaderboard';
 import { handleMcp } from './mcp';
 import type { PlayerDO, PlayerView } from './player';
 
@@ -348,20 +349,17 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     m = req.method;
   if (p === '/api/config') return json({ github: !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET), demo: env.DEMO_LOGIN !== 'off' });
   if (p === '/api/leaderboard') {
-    const cutoff = Date.now() - RANKED_MIN_ACCOUNT_AGE_MS;
-    const cols = 'handle, verified, npc, persona, name, seed, level, stage, rating, wins, losses, draws, xp';
-    const where = `has_creature = 1 AND ${visibleSql(env)}`;
-    const ranked = await env.DB.prepare(
-      `SELECT ${cols} FROM players WHERE ${where} AND ${rankedSql(env)} ORDER BY rating DESC, wins DESC, xp DESC LIMIT 50`,
-    )
-      .bind(cutoff)
-      .all();
-    const unranked = await env.DB.prepare(
-      `SELECT ${cols} FROM players WHERE ${where} AND NOT ${rankedSql(env)} ORDER BY wins DESC, xp DESC LIMIT 50`,
-    )
-      .bind(cutoff)
-      .all();
-    return json({ players: ranked.results, unranked: unranked.results });
+    // Public, but a logged-in viewer also gets their own place (`me`).
+    const viewer = await authenticate(req, env);
+    return json(
+      await leaderboard(env.DB, {
+        rankedSql: rankedSql(env),
+        visibleSql: visibleSql(env),
+        minAccountAgeMs: RANKED_MIN_ACCOUNT_AGE_MS,
+        now: Date.now(),
+        pid: viewer?.s.pid ?? null,
+      }),
+    );
   }
   const a = await authenticate(req, env);
   if (!a) return err(401, 'Not logged in.');
