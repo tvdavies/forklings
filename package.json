@@ -11,6 +11,7 @@
     "format": "biome check --write .",
     "test": "bun test test/unit",
     "e2e": "bun test/e2e/run.ts",
+    "e2e:local": "bun test/e2e/local.ts",
     "art": "bun scripts/art.ts",
     "icons": "bun scripts/icons.ts"
   },
