@@ -70,7 +70,7 @@ export const CLASSICS: Record<string, { level: number; price: number }> = {
   beanie: { level: 1, price: 40 },
   glasses: { level: 1, price: 40 },
   mug: { level: 1, price: 60 },
-  scarf: { level: 1, price: 45 },
+  scarf: { level: 2, price: 45 },
   bowtie: { level: 3, price: 80 },
   party: { level: 3, price: 80 },
   phones: { level: 5, price: 90 },

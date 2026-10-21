@@ -70,6 +70,57 @@ await step('wardrobe equips a starter item', async () => {
   await shot(p, 'desktop-home');
 });
 
+const purse = async (pg: Page) => Number(await pg.textContent('#purseBits'));
+
+await step('shop: a level-locked item says how far away it is', async () => {
+  await p.goto(`${BASE}/#shop`);
+  await p.locator('#shelf .offer').first().waitFor();
+  // 50 to start, plus 10 for the daily care bonus the pat above earned
+  expect((await purse(p)) === 60, `expected 50 + 10 bits, has ${await purse(p)}`);
+  await p.locator('#shelf .offer[aria-label^="Crown"]').click();
+  await p.waitForFunction(() => /Unlocks at level 15: 14 levels to go/.test(document.querySelector('#shopPick')?.textContent ?? ''));
+  expect(await p.locator('#shopPick [data-act=buy]').isDisabled(), 'buy is disabled while locked');
+  await p.waitForTimeout(500);
+  await shot(p, 'desktop-shop-locked');
+});
+
+let bought = '';
+await step('shop: try on, buy with two taps, then wear it', async () => {
+  // today's cheapest item a level-1 Forkling can buy: one generated common always opens at level 1
+  const pick = await p.evaluate(() => {
+    const left = Number(document.querySelector('#purseBits')?.textContent);
+    const ok = [...document.querySelectorAll<HTMLElement>('#shelf .offer:not(.locked)')].filter(
+      (b) => b.querySelector('.tg.new') && Number(b.querySelector('.price')?.textContent) <= left,
+    );
+    return ok[0]?.dataset.id ?? 'scarf';
+  });
+  bought = pick;
+  await p.locator(`#shelf .offer[data-id="${pick}"]`).click();
+  await p.locator('#shopPick [data-act=buy]').waitFor();
+  await p.waitForTimeout(700);
+  await shot(p, 'desktop-shop-preview');
+  const before = await purse(p);
+  await p.click('#shopPick [data-act=buy]');
+  expect(((await p.textContent('#shopPick [data-act=buy]')) ?? '').startsWith('Tap again'), 'first tap asks to confirm');
+  expect((await purse(p)) === before, 'nothing spent on the first tap');
+  await p.click('#shopPick [data-act=buy]');
+  await p.waitForFunction(() => /^Bought/.test(document.querySelector('#shopPick .toastline')?.textContent ?? ''));
+  expect((await purse(p)) < before, 'bits were spent');
+  await p.click('#shopPick [data-act=wear]');
+  await p.waitForFunction(() => /^Wearing/.test(document.querySelector('#shopPick .toastline')?.textContent ?? ''));
+  await p.waitForTimeout(900);
+  await shot(p, 'desktop-shop-bought');
+});
+
+await step('shop: the purchase is in the wardrobe, here and at home', async () => {
+  await p.click('#shopFilters [data-f=mine]');
+  await p.locator(`#shelf .offer[data-id="${bought}"] .tg.worn`).waitFor();
+  await p.goto(`${BASE}/#home`);
+  await p.locator('#wardrobe .item[aria-pressed=true]').first().waitFor();
+  const worn = await p.locator('#wardrobe .item[aria-pressed=true]').count();
+  expect(worn >= 1, 'home wardrobe shows what is worn');
+});
+
 await step('coaching tactics save', async () => {
   await p.goto(`${BASE}/#coach`);
   await p.locator('#coachForm').waitFor({ state: 'visible' });
@@ -168,6 +219,18 @@ await step('phone: battle and leaderboard render', async () => {
   await m.locator('#ranks li').first().waitFor();
   await m.waitForTimeout(400);
   await shot(m, 'phone-ranks');
+});
+
+await step('phone: the shop fits and shows the fitting room first', async () => {
+  await m.goto(`${BASE}/#shop`);
+  await m.locator('#shelf .offer').first().waitFor();
+  await m.locator('#shelf .offer.locked').first().click();
+  await m.waitForTimeout(800);
+  const overflow = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow <= 1, `shop is ${overflow}px wider than the screen`);
+  const fit = await m.locator('#fitCanvas').boundingBox();
+  expect(fit && fit.y < 300 && fit.width > 300, 'fitting room is near the top and nearly full width');
+  await shot(m, 'phone-shop');
 });
 
 await step('phone: tap targets are at least 44px tall', async () => {

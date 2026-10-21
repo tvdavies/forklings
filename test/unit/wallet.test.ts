@@ -1,37 +1,11 @@
 // The bits ledger on a real SQLite database (bun:sqlite standing in for Durable Object storage):
 // replays, retries and racing purchases must never pay or charge twice.
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { REWARDS, START_BITS, welcomeBits } from '../../src/shared/economy';
-import { type Sql, Wallet } from '../../src/worker/wallet';
+import { makeWallet } from './sqlite';
 
 const T0 = Date.UTC(2026, 9, 21, 9, 0, 0);
 const DAY = 86400e3;
-
-/** bun:sqlite behind the same small interface the Durable Object's SqlStorage provides. */
-function makeWallet(db = new Database(':memory:')) {
-  const sql: Sql = {
-    exec(query, ...bindings) {
-      const parts = query.split(';').filter((q) => q.trim());
-      if (parts.length > 1) {
-        for (const q of parts) db.run(q);
-        return { toArray: () => [], rowsWritten: 0 };
-      }
-      const st = db.prepare(query);
-      if (/^\s*(SELECT|WITH)/i.test(query)) {
-        // biome-ignore lint/suspicious/noExplicitAny: test adapter between two SQL APIs
-        const rows = st.all(...(bindings as any[]));
-        // biome-ignore lint/suspicious/noExplicitAny: test adapter between two SQL APIs
-        return { toArray: () => rows as any[], rowsWritten: 0 };
-      }
-      // biome-ignore lint/suspicious/noExplicitAny: test adapter between two SQL APIs
-      const r = st.run(...(bindings as any[]));
-      return { toArray: () => [], rowsWritten: r.changes };
-    },
-  };
-  const w = new Wallet(sql, (fn) => db.transaction(fn)());
-  return { w, db };
-}
 
 const owned = new Set<string>();
 const me = (level: number) => ({ level, owns: (id: string) => owned.has(id) });

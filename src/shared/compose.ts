@@ -1195,13 +1195,30 @@ export function itemWornCols(d: ItemDef) {
   return cropCols(cols, 32, 32);
 }
 
-/** The shop and wardrobe icon: the item's own pixel map, or for drawn items how it looks worn. */
+/** The mannequin's own pixels in an icon: a flat silhouette, so the item stands out. */
+const GHOST = '#4a3a6b',
+  GHOST_EDGE = '#33264c';
+
+/**
+ * The shop and wardrobe icon: the item's own pixel map, or for drawn items how it looks worn.
+ * Clothes (`wear`) follow the body, so alone they're a thin band: they're shown on a ghost of the mannequin.
+ */
 export function itemIconCols(id: string, d?: ItemDef) {
   const it = d ?? ITEMS[id];
   if (!it) return { cols: [] as Px[], w: 0, h: 0 };
   if (hasMap(it)) return mapCols(it.map, it.cols);
   if (!it.kind && ICONS[id]) return mapCols(ICONS[id].map, ICONS[id].cols);
-  return itemWornCols(it);
+  if (it.kind !== 'wear') return itemWornCols(it);
+  const items: Record<string, string | null> = noItems();
+  items[it.slot] = '_';
+  const g = { ...MANNEQUIN, items, gear: { _: it } };
+  const worn = compose(g, { stage: 1, itemsOnly: true }).cols,
+    whole = compose(g, { stage: 1 }).cols;
+  return cropCols(
+    whole.map((c, i) => worn[i] ?? (c ? (c === INK ? GHOST_EDGE : GHOST) : null)),
+    32,
+    32,
+  );
 }
 
 /** Egg sprite in the creature's own palette (the hint before the reveal). */

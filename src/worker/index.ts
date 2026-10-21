@@ -328,10 +328,10 @@ async function shop(env: Env, me: PlayerStub) {
 
 async function buy(env: Env, me: PlayerStub, body: JsonBody) {
   const offer = await findOffer(env, body.item);
-  if (!offer) return err(409, 'That item has left the shop. New stock arrives at midnight UTC.');
-  const r = await me.buy(offer, body.requestId);
-  if (!r.ok) return json({ error: r.error, code: r.code, balance: r.balance, ...r.view }, 409);
-  return json(r);
+  if (!offer) return json({ error: 'That item has left the shop. New stock arrives at midnight UTC.', code: 'gone' }, 409);
+  // Like every write endpoint, the player view comes back alongside the result, at the top level.
+  const { view, ...r } = await me.buy(offer, body.requestId);
+  return json({ ...view, ...r }, r.ok ? 200 : 409);
 }
 
 // ---------- tokens ----------

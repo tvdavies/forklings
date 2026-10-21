@@ -19,10 +19,12 @@ export const RESURFACED_PER_DAY = 4;
 export const RESURFACE_COOLDOWN_DAYS = 7;
 /** Candidates tried per slot before giving up on that slot for the night. */
 export const MAX_ATTEMPTS = 40;
+/** Slots a stage-0 Forkling shows: neck and held items appear from the first evolution. */
+export const BABY_SLOTS = new Set<Slot>(['head', 'face', 'body']);
 
 export const CREAM = '#fff2dc';
-/** Every colour a generated item may use: the creature ramps, ink and cream. */
-export const ITEM_PALETTE = new Set<string>([...Object.values(RAMPS).flat(), INK, CREAM]);
+/** Every colour a generated item may use: the creature ramps, ink, cream, and white for glints. */
+export const ITEM_PALETTE = new Set<string>([...Object.values(RAMPS).flat(), INK, CREAM, '#ffffff']);
 
 /** A generated item: its drawing (`ItemDef`) plus shop data. */
 export interface GenItem {
@@ -767,9 +769,11 @@ export function generateDay(seed: number, day: string, existing: Existing[]): { 
       break;
     }
   });
-  // Something new a brand-new Forkling can buy: the first common of the night opens at level 1.
-  if (!items.some((i) => i.level <= 1)) {
-    const c = items.find((i) => i.def.rarity === 0);
+  // Something new a brand-new Forkling can buy and see: the first head, face or body common opens at level 1.
+  // (Babies have no neck to wear things on and don't hold items, so those wouldn't show.)
+  // On a night without such a common, the least rare one opens at level 1 instead.
+  if (!items.some((i) => i.level <= 1 && BABY_SLOTS.has(i.def.slot))) {
+    const c = items.filter((i) => BABY_SLOTS.has(i.def.slot)).sort((a, b) => a.def.rarity - b.def.rarity)[0];
     if (c) c.level = 1;
   }
   return { items, rejected };

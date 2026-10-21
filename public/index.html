@@ -70,8 +70,34 @@
       <div>
         <div class="panel stats" id="stats"></div>
         <h3 class="sub">Wardrobe</h3>
-        <p class="small dim">Head, face and neck are cosmetic. A held item gives a small battle edge (at most +6% to one stat). Tap and hold an item to see it.</p>
+        <p class="small dim">Head, face, neck and body are cosmetic. A held item gives a small battle edge (at most +6% to one stat). Find more in the <a href="#shop">shop</a>.</p>
         <div class="wardrobe" id="wardrobe" aria-label="Wardrobe"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="v-shop" hidden>
+    <div class="shop-head">
+      <div>
+        <h2>Shop</h2>
+        <p class="dim small" id="shopRestock"></p>
+      </div>
+      <div class="purse" aria-live="polite"><i class="coin big" aria-hidden="true"></i><span id="purseBits">0</span><span class="dim">bits</span></div>
+    </div>
+    <div class="shop-grid">
+      <div class="fitting">
+        <div class="stage ar1211"><canvas id="fitCanvas" aria-label="Fitting room: your Forkling wearing the item you picked"></canvas></div>
+        <div class="panel pick" id="shopPick"></div>
+      </div>
+      <div>
+        <div class="filters" id="shopFilters" role="group" aria-label="Show">
+          <button type="button" data-f="all">All</button><button type="button" data-f="head">Head</button><button type="button" data-f="face">Face</button><button type="button" data-f="neck">Neck</button><button type="button" data-f="body">Body</button><button type="button" data-f="held">Held</button><button type="button" data-f="mine">My wardrobe</button>
+        </div>
+        <div class="shelf" id="shelf" aria-label="Items"></div>
+        <details class="panel earn">
+          <summary class="lbl">How to earn bits</summary>
+          <div id="earnBody"></div>
+        </details>
       </div>
     </div>
   </section>
@@ -159,6 +185,8 @@
     <pre class="term" id="apiDocs">GET  /api/me                 your Forkling, needs and wardrobe
 POST /api/care      {"action":"feed"|"play"|"pat"|"nap"}
 POST /api/equip     {"slot":"head","item":"beanie"|null}
+GET  /api/shop                 today's stock, your bits and today's earnings
+POST /api/shop/buy  {"item":"g20261021a","requestId":"any-unique-id"}  (retry with the same id: never charges twice)
 POST /api/tactics   {"aggression":60,"special":"open","healAt":25,"style":"balanced"}
 POST /api/script    {"script":"when hp &lt; 40: heal\notherwise: strike"}
 GET  /api/status-line          two lines of text for a terminal status bar
@@ -171,6 +199,7 @@ GET  /api/leaderboard</pre>
 
 <nav class="tabs" id="tabs" hidden>
   <a href="#home" data-tab="home">Home</a>
+  <a href="#shop" data-tab="shop">Shop</a>
   <a href="#coach" data-tab="coach">Coach</a>
   <a href="#battle" data-tab="battle">Battle<span class="dot" id="battleDot" hidden></span></a>
   <a href="#ranks" data-tab="ranks">Ranks</a>
