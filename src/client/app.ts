@@ -5,7 +5,7 @@ import { ITEMS, SLOTS } from '../shared/compose';
 import { describe, type Genome, genome, RARITY, RCOL, STAGE_NAMES } from '../shared/genome';
 import { advance, type PetState, STAGE_XP } from '../shared/state';
 import { battleVerdict } from '../shared/verdict';
-import { itemIcon, paintStatic, spr } from './engine';
+import { itemIcon, paintStatic, RM, spr } from './engine';
 import { makeBattle, makeEvo, makeHatch, makeHome } from './scenes';
 
 // ---------- API shapes (the fields of the Worker's JSON responses that the client reads) ----------
@@ -97,6 +97,15 @@ interface LeaderRow {
   draws: number;
   xp: number;
 }
+/** The viewer's own row; see MyPlace in src/worker/leaderboard.ts. */
+type MyPlace = LeaderRow &
+  ({ ranked: true; rank: number; of: number } | { ranked: false; reason: 'github' | 'age'; rankedAt: number | null });
+interface LeaderboardResponse {
+  players: LeaderRow[];
+  npcs: LeaderRow[];
+  unranked: LeaderRow[];
+  me: MyPlace | null;
+}
 interface TokenRow {
   id: string;
   name: string;
@@ -153,6 +162,8 @@ function petGenome(c: CreatureView): Genome {
 // ---------- routing ----------
 const VIEWS = ['login', 'hatch', 'home', 'coach', 'battle', 'ranks', 'api'];
 function show(v: string) {
+  // Picking a tab from the keyboard moves focus to the new screen, not back to the top of the page.
+  const fromTabs = S.view !== v && !!document.activeElement?.closest('#tabs');
   S.view = v;
   for (const id of VIEWS) $(`v-${id}`).hidden = id !== v;
   const authed = !!S.me;
@@ -166,6 +177,11 @@ function show(v: string) {
   if (v === 'ranks') renderRanks();
   if (v === 'api') renderTokens();
   window.scrollTo(0, 0);
+  if (fromTabs) {
+    const sec = $(`v-${v}`);
+    sec.tabIndex = -1;
+    sec.focus({ preventScroll: true });
+  }
 }
 function route() {
   if (!S.me) return show('login');
@@ -379,9 +395,18 @@ function startEvolution() {
     [`+${Math.round(after.atk - before.atk)} Attack`, '#ff6f62'],
     [`Now a ${STAGE_NAMES[to]}`, '#ffd166'],
   ];
+  // A modal moment: the page behind can't be reached until the player closes it.
+  const back = document.activeElement as HTMLElement | null;
+  for (const id of ['top', 'app', 'tabs']) $(id).inert = true;
   $('evoOverlay').hidden = false;
   $('evoDone').hidden = true;
+  $('evoBox').focus();
+  $('evoMsg').textContent = `${S.g!.name} is evolving into a ${STAGE_NAMES[to]}.`;
   const st = makeEvo($<HTMLCanvasElement>('evoCanvas'), S.g!, from, to, chips, () => {
+    $('evoMsg').textContent = `${S.g!.name} is now a ${STAGE_NAMES[to]}: ${chips
+      .filter(([txt]) => txt.startsWith('+'))
+      .map(([txt]) => txt)
+      .join(', ')}.`;
     $('evoDone').hidden = false;
     $('evoDone').focus();
   });
@@ -392,9 +417,11 @@ function startEvolution() {
       S.g = petGenome(S.me.creature!);
     } finally {
       $('evoOverlay').hidden = true;
+      for (const id of ['top', 'app', 'tabs']) $(id).inert = false;
       st.destroy();
       evoRunning = false;
       renderHome();
+      if (back?.isConnected) back.focus();
     }
   };
 }
@@ -468,6 +495,16 @@ function initCoach() {
 
 // ---------- battle ----------
 let speed = 1;
+/** Clears the hidden narration list and returns a callback that adds each canvas line to it, for screen readers. */
+function sayLine() {
+  const ol = $('battleLines');
+  ol.replaceChildren();
+  return (text: string) => {
+    const li = document.createElement('li');
+    li.textContent = text;
+    ol.appendChild(li);
+  };
+}
 let fighting = false;
 let battleReadyAt = 0; // the server keeps a short gap between battles
 const oppTag = (s: Snapshot) => (s.bot ? ' (house bot)' : s.pid.startsWith('npc:') ? ' (NPC)' : s.verified ? '' : ' (unverified)');
@@ -607,6 +644,7 @@ async function startFight() {
     $('battleMsg').textContent = `vs @${out.b.handle}${oppTag(out.b)}`;
     battleStage.play(out, 0, {
       speed,
+      onLine: sayLine(),
       onDone: async (res: BattleResult) => {
         fighting = false;
         await refresh().catch(() => {});
@@ -647,7 +685,12 @@ async function renderBattleLog() {
   $('battleDot').hidden = true;
   const ul = $('battleLog');
   if (!r.battles.length) {
-    ul.innerHTML = '<li class="dim">No battles yet. Find one!</li>';
+    ul.innerHTML = `<li class="empty"><p>No battles yet. Your Forkling fights on its own, using the plan you set in Coach.</p>
+    <div class="row"><button class="btn" type="button" id="firstFightBtn">Find a battle</button><a class="btn ghost" href="#coach">Check the plan</a></div></li>`;
+    $('firstFightBtn').addEventListener('click', () => {
+      $('fightBtn').click();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
     return;
   }
   ul.innerHTML = r.battles
@@ -665,35 +708,68 @@ async function renderBattleLog() {
       const loot = rep.side === 0 ? (r.battles.find((x) => x.id === rep.id)?.loot || '').split(':')[0] || null : null;
       hideResult();
       $('battleMsg').textContent = `Replay vs @${rep.side === 0 ? rep.b.handle : rep.a.handle}`;
-      battleStage.play({ ...rep, loot }, rep.side, { speed });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      battleStage.play({ ...rep, loot }, rep.side, { speed, onLine: sayLine() });
+      window.scrollTo({ top: 0, behavior: RM ? 'auto' : 'smooth' });
     });
 }
 
 // ---------- leaderboard ----------
-function rankList(ol: HTMLElement, players: LeaderRow[], ranked: boolean) {
+/** A row's name, handle line and score cells (everything after the sprite). */
+function rankCells(p: LeaderRow, ranked: boolean, badge = true) {
+  const tag = !badge
+    ? ''
+    : p.npc
+      ? `<span class="badge npc" title="House NPC: ${esc(p.persona || '')}">NPC</span>`
+      : p.verified
+        ? ''
+        : '<span class="badge warn">unverified</span>';
+  return `<div><div class="nm">${esc(p.name)}</div><div class="hd">@${esc(p.handle)} ${tag} · Lv ${p.level} ${STAGE_NAMES[p.stage]}</div></div>
+    <div><div class="rt">${ranked ? p.rating : `${p.wins}W`}</div><div class="wl">${ranked ? `${p.wins}W ${p.losses}L${p.draws ? ` ${p.draws}D` : ''}` : `${p.losses}L · ${p.xp} XP`}</div></div>`;
+}
+function paintRow(cv: HTMLCanvasElement, p: LeaderRow) {
+  if (p.seed) paintStatic(cv, spr({ ...genome(p.seed) }, { stage: p.stage }), 48);
+}
+function rankList(ol: HTMLElement, players: LeaderRow[], ranked: boolean, empty: string) {
   if (!players.length) {
-    ol.innerHTML = `<li class="empty">${ranked ? 'No ranked players yet. Ranked play opens to GitHub accounts at least 30 days old.' : 'No one yet.'}</li>`;
+    ol.innerHTML = `<li class="empty">${empty}</li>`;
     return;
   }
   ol.innerHTML = players
     .map(
-      (p, i) => `<li class="${p.handle === S.me!.session.handle ? 'me' : ''}"><canvas data-i="${i}" aria-hidden="true"></canvas>
-    <div><div class="nm">${esc(p.name)}</div><div class="hd">@${esc(p.handle)} ${p.npc ? `<span class="badge npc" title="House NPC: ${esc(p.persona || '')}">NPC</span>` : p.verified ? '' : '<span class="badge warn">unverified</span>'} · Lv ${p.level} ${STAGE_NAMES[p.stage]}</div></div>
-    <div><div class="rt">${ranked ? p.rating : `${p.wins}W`}</div><div class="wl">${ranked ? `${p.wins}W ${p.losses}L${p.draws ? ` ${p.draws}D` : ''}` : `${p.losses}L · ${p.xp} XP`}</div></div></li>`,
+      (p, i) =>
+        `<li class="${p.handle === S.me!.session.handle ? 'me' : ''}"><canvas data-i="${i}" aria-hidden="true"></canvas>
+    ${rankCells(p, ranked)}</li>`,
     )
     .join('');
   ol.querySelectorAll('canvas').forEach((cv) => {
-    const p = players[Number(cv.dataset.i)];
-    if (!p.seed) return;
-    const g: Genome = { ...genome(p.seed) };
-    paintStatic(cv, spr(g, { stage: p.stage }), 48);
+    paintRow(cv, players[Number(cv.dataset.i)]);
   });
 }
+/** The pinned "You" row: your place, or why you're in the practice bracket. */
+function renderMyPlace(me: MyPlace | null) {
+  const box = $('rankMe');
+  box.hidden = !me;
+  if (!me) return;
+  let status: string;
+  if (me.ranked) status = `#${me.rank} of ${me.of} ranked ${me.of === 1 ? 'player' : 'players'}`;
+  else if (me.reason === 'github') status = 'Unranked: GitHub account needed';
+  else if (me.rankedAt === null) status = 'Practice: ranked play opens when your GitHub account is 30 days old';
+  else {
+    const days = Math.max(1, Math.ceil((me.rankedAt - Date.now()) / 86400e3));
+    status = `Practice: ranked play opens in ${days} ${days === 1 ? 'day' : 'days'}`;
+  }
+  box.innerHTML = `<div class="pos">${me.ranked ? `#${me.rank}` : '–'}<span>You</span></div><canvas aria-hidden="true"></canvas>
+    ${rankCells(me, me.ranked, false)}<p class="status">${esc(status)}</p>`;
+  paintRow(box.querySelector('canvas')!, me);
+}
 async function renderRanks() {
-  const r = await api<{ players: LeaderRow[]; unranked?: LeaderRow[] }>('/api/leaderboard');
-  rankList($('ranks'), r.players, true);
-  rankList($('ranksU'), r.unranked || [], false);
+  const r = await api<LeaderboardResponse>('/api/leaderboard');
+  renderMyPlace(r.me);
+  rankList($('ranks'), r.players, true, 'No ranked players yet. Ranked play opens to GitHub accounts at least 30 days old.');
+  rankList($('ranksU'), r.unranked, false, 'No one in practice right now.');
+  $('npcFold').hidden = !r.npcs.length;
+  $('npcCount').textContent = String(r.npcs.length);
+  rankList($('ranksN'), r.npcs, true, '');
 }
 
 // ---------- tokens ----------
@@ -707,7 +783,7 @@ async function renderTokens() {
             `<li><div><span class="res">${esc(t.name)}</span><div class="meta">created ${new Date(t.created_at).toLocaleDateString()}${t.last_used ? ` · last used ${new Date(t.last_used).toLocaleString()}` : ' · never used'}</div></div><button class="btn ghost" data-revoke="${esc(t.id)}" type="button">Revoke</button></li>`,
         )
         .join('')
-    : '<li class="dim">No tokens yet.</li>';
+    : '<li class="empty"><p>No tokens yet. Name one above, then paste it into Claude Code, Pi or any MCP client.</p></li>';
   for (const b of ul.querySelectorAll<HTMLElement>('[data-revoke]'))
     b.addEventListener('click', async () => {
       await api(`/api/tokens/${b.dataset.revoke}`, { method: 'DELETE' });
@@ -740,16 +816,57 @@ setInterval(async () => {
   }
 }, 60000);
 
+// ---------- boot ----------
+// index.html paints a loader before this script runs. boot() swaps it for the app once /api answers,
+// or for a retry panel if it doesn't; Try again runs boot() again without reloading the page.
+let loginReady = false;
+async function boot() {
+  bootState('loading');
+  try {
+    await refresh();
+  } catch {
+    bootState('error');
+    return;
+  }
+  // Set up the login view once the API answers, so a failed first try doesn't leave it half set up.
+  if (!loginReady) {
+    loginReady = true;
+    await initLogin().catch(() => {
+      $('demoErr').textContent = "Couldn't reach Forklings. Check your connection and reload.";
+    });
+  }
+  $('boot').hidden = true;
+  route();
+}
+function bootState(state: 'loading' | 'error') {
+  const failed = state === 'error',
+    retry = $<HTMLButtonElement>('bootRetry');
+  $('boot').dataset.state = state;
+  $('bootLine').textContent = failed ? "Can't reach Forklings" : 'Waking your Forkling…';
+  $('bootWhy').textContent = failed
+    ? "The game server didn't answer, but your Forkling is safe. Check your connection, then try again."
+    : '';
+  if (failed) {
+    retry.hidden = false;
+    retry.removeAttribute('aria-disabled');
+    retry.textContent = 'Try again';
+    retry.focus();
+  } else if (!retry.hidden) {
+    // Retrying: keep the button (and keyboard focus) where it is, but inert until this attempt ends.
+    retry.setAttribute('aria-disabled', 'true');
+    retry.textContent = 'Trying…';
+  }
+}
+$('bootRetry').addEventListener('click', () => {
+  if ($('bootRetry').getAttribute('aria-disabled') !== 'true') boot();
+});
+
 (async function main() {
   initHatch();
   initCare();
   initCoach();
   initBattle();
   initTokens();
-  await initLogin().catch(() => {
-    $('demoErr').textContent = "Couldn't reach Forklings. Check your connection and reload.";
-  });
-  await refresh();
-  route();
+  await boot();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 })();

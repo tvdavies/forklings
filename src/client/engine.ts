@@ -276,13 +276,28 @@ export class Stage {
     this.ctx.fillStyle = col;
     this.ctx.fillRect(this.ox + Math.round(ax) * this.P, this.oy + Math.round(ay) * this.P, Math.round(w) * this.P, Math.round(h) * this.P);
   }
+  font(size: number, weight?: number) {
+    return `${weight || 600} ${Math.max(8, Math.round(size * this.P))}px "Pixelify Sans", system-ui, sans-serif`;
+  }
   text(s: string, ax: number, ay: number, size: number, col: string, align?: CanvasTextAlign, weight?: number) {
     const x = this.ctx;
-    x.font = `${weight || 600} ${Math.max(8, Math.round(size * this.P))}px "Pixelify Sans", system-ui, sans-serif`;
+    x.font = this.font(size, weight);
     x.fillStyle = col;
     x.textAlign = align || 'left';
     x.textBaseline = 'top';
     x.fillText(s, this.ox + ax * this.P, this.oy + ay * this.P);
+  }
+  /** Width of `s` in art pixels at this text size. */
+  measure(s: string, size: number, weight?: number) {
+    this.ctx.font = this.font(size, weight);
+    return this.ctx.measureText(s).width / this.P;
+  }
+  /** `s`, cut short with an ellipsis if it would be wider than `maxW` art pixels. */
+  fit(s: string, size: number, maxW: number, weight?: number) {
+    if (this.measure(s, size, weight) <= maxW) return s;
+    let n = s.length;
+    while (n > 1 && this.measure(`${s.slice(0, n).trimEnd()}…`, size, weight) > maxW) n--;
+    return `${s.slice(0, n).trimEnd()}…`;
   }
   glow(ax: number, ay: number, r: number, col: string, a: number) {
     const x = this.ctx,
