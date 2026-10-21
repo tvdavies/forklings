@@ -58,7 +58,11 @@ Apply the D1 migrations to the local database with `npx wrangler d1 migrations a
 
 Signing in needs a GitHub OAuth app, so make a separate one for development with the callback URL `http://localhost:8787/auth/github/callback`. Without one, the sign-in page says GitHub sign-in isn't set up.
 
-Run `bun scripts/art.ts` to regenerate the README art and `bun scripts/icons.ts` to regenerate the favicons, app icons and brand mark. `bun test/e2e/run.ts` checks a running copy in a real browser: on its own it covers the sign-in page, and with `FORKLINGS_SESSION` set to a signed-in `fk_session` cookie it plays through the whole game. `bun test/e2e/oauth.ts http://localhost:8787`, with the same `FORKLINGS_SESSION`, checks MCP sign-in end to end against a local `npm run dev`: discovery, registration, consent, PKCE, scopes, refresh and revocation, using the MCP TypeScript SDK as the client. With `CHROMIUM` set it screenshots the consent page.
+Run `bun scripts/art.ts` to regenerate the README art and `bun scripts/icons.ts` to regenerate the favicons, app icons and brand mark.
+
+`npm run e2e:local` runs the whole end-to-end suite in a real browser with no GitHub OAuth app and no `.dev.vars`: it starts a throwaway `wrangler dev` on port 8787 with a fresh local database, fires the cron once so the house NPCs exist, adds a signed-in test player the way GitHub sign-in would (a `players` row plus a session cookie), then runs both scripts below. A session cookie on its own isn't enough: without the `players` row the player is left off the leaderboard and their API tokens are refused.
+
+`bun test/e2e/run.ts` checks a running copy in a real browser: on its own it covers the sign-in page, and with `FORKLINGS_SESSION` set to a signed-in `fk_session` cookie it plays through the whole game. `bun test/e2e/oauth.ts http://localhost:8787`, with the same `FORKLINGS_SESSION`, checks MCP sign-in end to end against a local `npm run dev`: discovery, registration, consent, PKCE, scopes, refresh and revocation, using the MCP TypeScript SDK as the client. With `CHROMIUM` set it screenshots the consent page.
 
 ## Deploy your own
 

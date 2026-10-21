@@ -6,6 +6,9 @@
 // cookie from a browser signed in to the same server.
 //
 //   CHROMIUM=/usr/bin/chromium FORKLINGS_SESSION=<fk_session> bun test/e2e/run.ts [https://forklings.dev]
+//
+// To run every check locally with no GitHub app, use `bun test/e2e/local.ts`: it starts a
+// throwaway `wrangler dev`, seeds the house NPCs and a signed-in player, and runs this file.
 import { mkdirSync } from 'node:fs';
 import { type BrowserContext, chromium, type Page } from 'playwright-core';
 
@@ -130,12 +133,14 @@ await step('demo sign-in is gone and stray sessions are refused', async () => {
   const me = await fetch(`${BASE}/api/me`, { headers: { cookie: 'fk_session=not.a-session' } });
   expect(me.status === 401, `a bad session should get 401, got ${me.status}`);
   const mcp = await fetch(`${BASE}/mcp`, { method: 'POST', body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' });
-  expect(mcp.status === 401, `MCP without a token should get 401, got ${mcp.status}`);
+  // /mcp is served only at PUBLIC_ORIGIN, so locally a 404 means .dev.vars doesn't set it (see the README).
+  const hint = mcp.status === 404 ? ' (is PUBLIC_ORIGIN this server?)' : '';
+  expect(mcp.status === 401, `MCP without a token should get 401, got ${mcp.status}${hint}`);
 });
 
 await step('leaderboard still lists NPCs, with no unverified players', async () => {
   const r = (await (await fetch(`${BASE}/api/leaderboard`)).json()) as { players: object[]; npcs: object[]; unranked: object[] };
-  expect(r.npcs.length > 0, 'house NPCs should be listed');
+  expect(r.npcs.length > 0, 'house NPCs should be listed (a fresh local D1 has none until the cron runs)');
   expect(
     [...r.players, ...r.npcs, ...r.unranked].every((x) => !('verified' in x)),
     'rows no longer carry a verified flag',
