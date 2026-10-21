@@ -1,12 +1,15 @@
 // Signed session cookies and per-user API tokens.
 import type { Env } from './env';
 
+/** A signed-in player. GitHub is the only way in, so `pid` is always `gh:<GitHub user id>`. */
 export interface Session {
   pid: string;
   h: string;
-  v: boolean;
   exp: number;
 }
+
+/** Player ids that can sign in. Anything else (house NPCs, retired accounts) never gets a session. */
+export const isGithubPid = (pid: unknown): pid is string => typeof pid === 'string' && /^gh:\d+$/.test(pid);
 
 const enc = new TextEncoder();
 const b64u = (buf: ArrayBuffer | Uint8Array) => {
@@ -34,9 +37,10 @@ export async function verifySession(env: Env, token: string | null): Promise<Ses
   try {
     const ok = await crypto.subtle.verify('HMAC', await hmacKey(env.SESSION_SECRET), fromB64u(sig), enc.encode(body));
     if (!ok) return null;
-    const s = JSON.parse(new TextDecoder().decode(fromB64u(body))) as Session;
-    if (!s.pid || s.exp < Date.now()) return null;
-    return s;
+    const s = JSON.parse(new TextDecoder().decode(fromB64u(body))) as Partial<Session> | null;
+    // Fail closed: only unexpired sessions for GitHub players are accepted.
+    if (!s || !isGithubPid(s.pid) || typeof s.h !== 'string' || typeof s.exp !== 'number' || s.exp < Date.now()) return null;
+    return { pid: s.pid, h: s.h, exp: s.exp };
   } catch {
     return null;
   }

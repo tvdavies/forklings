@@ -4,10 +4,11 @@
 // jar, so it runs in CI-like places without a display. With CHROMIUM set, it also screenshots
 // the consent page and the connected-apps list into test/e2e/out/.
 //
-// It signs up one demo player, so the server must allow demo login.
+// Signing in needs GitHub, so it plays as the player whose session you pass: copy the value of
+// the fk_session cookie from a browser signed in to the same server.
 //
-//   bun test/e2e/oauth.ts http://localhost:8787
-//   CHROMIUM=/usr/bin/chromium bun test/e2e/oauth.ts http://localhost:8787
+//   FORKLINGS_SESSION=<fk_session> bun test/e2e/oauth.ts http://localhost:8787
+//   CHROMIUM=/usr/bin/chromium FORKLINGS_SESSION=<fk_session> bun test/e2e/oauth.ts http://localhost:8787
 import { mkdirSync } from 'node:fs';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -120,8 +121,14 @@ async function approve(b: Browser, html: string, scopes: string[], origin = BASE
 }
 
 // ---------- the run ----------
+const SESSION = process.env.FORKLINGS_SESSION ?? '';
+if (!SESSION) {
+  console.error('Set FORKLINGS_SESSION to the fk_session cookie of a signed-in player.');
+  process.exit(1);
+}
 const browser = new Browser();
-const handle = `oauth-${Math.random().toString(36).slice(2, 8)}`;
+browser.jar.set('fk_session', SESSION);
+let handle = '';
 const provider = new MemoryProvider();
 let consentHtml = '';
 let access = '';
@@ -147,13 +154,12 @@ await step('other discovery documents 404 as JSON, not the app shell', async () 
   expect(res.status === 404, `got ${res.status}`);
 });
 
-await step('a demo player signs up and hatches', async () => {
-  const r = await browser.fetch(`${BASE}/auth/demo`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', origin: BASE },
-    body: JSON.stringify({ handle }),
-  });
-  expect(r.ok, `demo login ${r.status}`);
+await step('the GitHub session is signed in, with a Forkling', async () => {
+  const r = await browser.fetch(`${BASE}/api/me`);
+  expect(r.ok, `session ${r.status}`);
+  const me = (await r.json()) as { session: { handle: string }; creature: unknown };
+  handle = me.session.handle;
+  if (me.creature) return;
   const h = await browser.fetch(`${BASE}/api/hatch`, {
     method: 'POST',
     headers: { origin: BASE, 'content-type': 'application/json' },

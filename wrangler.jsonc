@@ -24,7 +24,7 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "forklings-db", "database_id": "16108f11-44aa-4c37-8743-619bfb0dc5b0", "migrations_dir": "migrations" }
   ],
-  "vars": { "PUBLIC_ORIGIN": "https://forklings.dev", "DEMO_LOGIN": "on", "NPCS": "on" },
+  "vars": { "PUBLIC_ORIGIN": "https://forklings.dev", "NPCS": "on" },
   // House NPCs: seeding, care and their battles run on this schedule.
   "triggers": { "crons": ["*/20 * * * *"] },
   "observability": { "enabled": true },

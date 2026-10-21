@@ -45,7 +45,6 @@ interface Creature {
 export interface Who {
   pid: string;
   handle: string;
-  verified: boolean;
   created: number;
 }
 
@@ -169,10 +168,10 @@ export class PlayerDO extends DurableObject<Env> {
     return c;
   }
 
-  async init(pid: string, handle: string, verified: boolean): Promise<void> {
+  async init(pid: string, handle: string): Promise<void> {
     const p = this.get<Who>('who');
-    if (!p || p.handle !== handle || p.verified !== verified) {
-      const who: Who = { pid, handle, verified, created: p?.created ?? Date.now() };
+    if (!p || p.handle !== handle) {
+      const who: Who = { pid, handle, created: p?.created ?? Date.now() };
       this.set('who', who);
     }
   }
@@ -360,7 +359,6 @@ export class PlayerDO extends DurableObject<Env> {
     return {
       pid: who.pid,
       handle: who.handle,
-      verified: !!who.verified,
       bot: false,
       seed: c.seed,
       stage: c.state.stage,

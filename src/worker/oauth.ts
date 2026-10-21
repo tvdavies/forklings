@@ -155,7 +155,6 @@ export async function revokeConnection(oauth: OAuthHelpers, pid: string, grantId
 export interface Signed {
   pid: string;
   handle: string;
-  verified: boolean;
 }
 export interface ForklingCard {
   name: string;
