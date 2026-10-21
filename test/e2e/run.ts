@@ -92,14 +92,19 @@ await step('strategy script reports errors and saves', async () => {
   await shot(p, 'desktop-coach');
 });
 
-await step('a battle plays out and lands in the log', async () => {
+await step('a battle plays out, ends on a result card with a reason, and lands in the log', async () => {
   await p.goto(`${BASE}/#battle`);
+  expect(/Energy\s*\d+\/100/.test((await p.textContent('#energyLine')) ?? ''), 'energy shows where you fight');
   await p.click('#fightBtn');
   await p.waitForFunction(() => /^vs @/.test(document.querySelector('#battleMsg')?.textContent ?? ''), null, { timeout: 15000 });
+  expect((await p.textContent('#fightBtn')) === 'Battling…', 'the fight button says Battling… mid-fight');
   await p.waitForTimeout(2500);
   await shot(p, 'desktop-battle');
   await p.click('#skipBtn');
-  await p.waitForFunction(() => /^(Won|Lost|Draw)/.test(document.querySelector('#battleMsg')?.textContent ?? ''), null, { timeout: 20000 });
+  await p.locator('#resultCard').waitFor({ state: 'visible', timeout: 20000 });
+  expect(/^(Won|Lost|Draw)$/.test((await p.textContent('#resultTitle')) ?? ''), 'result card names the outcome');
+  expect(((await p.textContent('#resultWhy')) ?? '').length > 10, 'result card gives a reason');
+  await shot(p, 'desktop-battle-result');
   await p.locator('#battleLog li [data-replay]').first().waitFor();
 });
 

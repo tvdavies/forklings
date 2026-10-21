@@ -117,6 +117,38 @@ input[type=range]{width:100%;max-width:420px;accent-color:var(--butter);height:2
 .log .meta{font-size:13px;color:var(--haze)}
 .log .btn{font-size:14px;padding:8px 10px}
 .log .new{color:var(--butter);font:600 12px/1 var(--f-pixel)}
+.btn.busy:disabled{opacity:1;cursor:progress}
+.energy{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin:4px 8px 0;font:600 15px/1.2 var(--f-pixel);color:var(--haze)}
+.energy .bar{width:110px;height:10px}
+.energy b{font-weight:600;color:var(--moon)}
+.energy .note{font:400 14px/1.3 var(--f-body)}
+
+/* battle result */
+.result{margin-top:10px;padding:14px 16px 10px;animation:rise .3s cubic-bezier(.2,1.4,.4,1)}
+@keyframes rise{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.result-head{display:flex;align-items:baseline;gap:4px 12px;flex-wrap:wrap}
+.result-title{font:700 40px/1 var(--f-pixel);text-shadow:0 3px 0 var(--ink)}
+.result-title.win{color:var(--mint)} .result-title.loss{color:var(--coral)} .result-title.draw{color:var(--sky)}
+.result-vs{flex:1;min-width:0;font-size:14px;color:var(--haze);overflow-wrap:anywhere}
+.result-close{min-height:44px;font-size:15px}
+.result-why{margin:8px 0 12px;font-size:17px}
+.result-rows{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 14px;align-items:center;margin:0 0 10px}
+.result-rows dt{font:600 15px/1 var(--f-pixel);color:var(--haze)}
+.result-rows dd{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font:600 18px/1.2 var(--f-pixel)}
+.result-rows .note{display:block;font:400 14px/1.3 var(--f-body);color:var(--haze)}
+.result-rows .up{color:var(--mint)} .result-rows .down{color:var(--coral)}
+.result-rows canvas{width:32px;height:32px}
+.result-rows .loot{display:grid;grid-template-columns:32px minmax(0,1fr) auto}
+.result-rows .loot .btn{margin:4px}
+.result-rows .worn{font-size:15px;color:var(--mint);padding:0 8px}
+.result-actions{display:flex;flex-wrap:wrap;margin:0 -4px}
+.result-actions .btn{flex:1 1 150px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;text-decoration:none;text-align:center}
+.result-actions small{font:400 13px/1 var(--f-body);opacity:.85}
+@media (max-width:520px){
+  .result-rows .loot{grid-template-columns:32px minmax(0,1fr)}
+  .result-rows .loot .btn,.result-rows .worn{grid-column:2;justify-self:start}
+}
+@media (prefers-reduced-motion:reduce){.result{animation:none}}
 
 /* ranks */
 .ranks{list-style:none;padding:0;margin:0;max-width:760px;display:grid;gap:8px;counter-reset:r}
