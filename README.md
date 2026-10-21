@@ -27,10 +27,11 @@ Forklings has an MCP server at `https://forklings.dev/mcp` and a Claude Code plu
 ```text
 /plugin marketplace add tvdavies/forklings
 /plugin install forklings@forklings
+/mcp                         # pick forklings, Authenticate, sign in with GitHub
 /forklings:forkling feed
 ```
 
-Create a token on the site's **API** tab first. [docs/claude-code.md](docs/claude-code.md) covers the status line and setup for Pi, Codex and other MCP clients.
+There's no token to paste: your tool signs in through the browser with OAuth, and you choose what it may do. Connected tools are listed, and can be disconnected, on the site's **API** tab. [docs/claude-code.md](docs/claude-code.md) covers Codex, Pi, other MCP clients, personal tokens for scripts and the status line.
 
 ## Quick start
 
@@ -47,9 +48,12 @@ For local development, put the secrets in `.dev.vars`, which git ignores:
 ```sh
 HATCH_SALT=<any long random string>
 SESSION_SECRET=<another long random string>
+PUBLIC_ORIGIN=http://localhost:8787
 ```
 
-Run `bun scripts/art.ts` to regenerate the README art, and `bun test/e2e/run.ts` to check a deployed copy in a real browser.
+Apply the D1 migrations to the local database with `npx wrangler d1 migrations apply forklings-db --local`.
+
+Run `bun scripts/art.ts` to regenerate the README art, and `bun test/e2e/run.ts` to check a deployed copy in a real browser. `bun test/e2e/oauth.ts http://localhost:8787` checks MCP sign-in end to end against a local `npm run dev`: discovery, registration, consent, PKCE, scopes, refresh and revocation, using the MCP TypeScript SDK as the client. It signs up a demo player, and with `CHROMIUM` set it screenshots the consent page.
 
 ## Deploy your own
 
@@ -57,7 +61,7 @@ It runs on one Cloudflare Worker with SQLite-backed Durable Objects and one D1 d
 
 ```sh
 npx wrangler d1 create forklings-db         # put the new database_id in wrangler.jsonc
-npx wrangler d1 migrations apply forklings-db --remote
+npx wrangler d1 migrations apply forklings-db --remote   # includes the OAuth token table
 openssl rand -hex 32 | npx wrangler secret put HATCH_SALT
 openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET
 npm run deploy

@@ -1,8 +1,9 @@
 // Forklings Worker: auth, routing and matchmaking. Static assets are served by
-// Workers Static Assets; everything under /api and /auth comes here first.
+// Workers Static Assets; /api, /auth, /mcp, /authorize, /oauth and /.well-known come here first.
 
+import { insufficientScope, type OAuthResourceContext } from '@cloudflare/workers-oauth-provider';
 import type { Snapshot } from '../shared/battle';
-import { genome } from '../shared/genome';
+import { genome, RARITY, STAGE_NAMES } from '../shared/genome';
 import { isRecord, prop } from '../shared/json';
 import { isOnboarding, LEVEL_RANGE, ONBOARDING_BATTLES, pickOpponent } from '../shared/matchmaking';
 import { NPC_ROSTER, npcPid } from '../shared/npcs';
@@ -10,10 +11,24 @@ import { sha256Hex } from '../shared/rng';
 import type { CareAction } from '../shared/state';
 import { cookie, getCookie, randomToken, SESSION_DAYS, type Session, sha256b64, signSession, verifySession } from './auth';
 import type { BattleOutcome } from './battle';
+import { D1KV } from './d1kv';
 import type { Env } from './env';
 import { leaderboard } from './leaderboard';
-import { handleMcp } from './mcp';
+import { handleMcp, portrait } from './mcp';
+import {
+  authorize,
+  type ForklingCard,
+  listConnections,
+  type McpProps,
+  type OAuthEnv,
+  oauthServers,
+  publicOrigin,
+  revokeConnection,
+  type Signed,
+  withOAuthStore,
+} from './oauth';
 import type { PlayerDO, PlayerView } from './player';
+import { effectiveScopes, isAuthorizeReturn } from './scopes';
 
 export { BattleDO } from './battle';
 export { PlayerDO } from './player';
@@ -28,6 +43,7 @@ const err = (status: number, message: string) => json({ error: message }, status
 const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 const DEMO_SIGNUPS_PER_IP_PER_DAY = 5;
 const PAIR_COOLDOWN_MS = 6 * 3600 * 1000;
+// Not exported: workerd rejects entry-module exports that aren't handlers or classes.
 const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
 // SQL for "may play ranked": a verified GitHub player whose account is at least 30 days
 // old, or a house NPC while NPCs are on. Takes one parameter: the account-age cutoff.
@@ -35,9 +51,7 @@ const rankedSql = (env: Env) => `(${npcsOn(env) ? 'npc = 1 OR ' : ''}(verified =
 const npcsOn = (env: Env) => env.NPCS !== 'off';
 const visibleSql = (env: Env) => (npcsOn(env) ? '1 = 1' : 'npc = 0');
 
-function origin(req: Request, env: Env) {
-  return env.PUBLIC_ORIGIN || new URL(req.url).origin;
-}
+const origin = (req: Request, env: Env) => publicOrigin(env, req);
 const isSecure = (req: Request) => new URL(req.url).protocol === 'https:';
 
 type PlayerStub = DurableObjectStub<PlayerDO>;
@@ -60,6 +74,7 @@ const readJson = async (r: Request | Response): Promise<JsonBody> => {
 
 // D1 rows read in this file.
 type TokenAuthRow = { id: string; pid: string; handle: string; verified: number };
+type PlayerRow = { handle: string; verified: number };
 type HandleRow = { pid: string; verified: number };
 type RatingRow = { rating: number; started: number };
 type PoolRow = { pid: string; snapshot: string; rating: number };
@@ -67,20 +82,30 @@ type NpcRow = { pid: string; handle: string };
 
 type Auth = { s: Session; via: 'cookie' | 'token' };
 
+const LAST_USED_GRANULARITY_MS = 10 * 60 * 1000;
+
+/** Check a personal `fk_` token. Its last-used time is written at most every 10 minutes. */
+async function personalToken(env: Env, tok: string): Promise<TokenAuthRow | null> {
+  if (!tok.startsWith('fk_')) return null;
+  const row = await env.DB.prepare(
+    'SELECT t.id, t.pid, p.handle, p.verified FROM api_tokens t JOIN players p ON p.pid = t.pid WHERE t.hash = ?',
+  )
+    .bind(await sha256b64(tok))
+    .first<TokenAuthRow>();
+  if (!row) return null;
+  const now = Date.now();
+  await env.DB.prepare('UPDATE api_tokens SET last_used = ? WHERE id = ? AND (last_used IS NULL OR last_used < ?)')
+    .bind(now, row.id, now - LAST_USED_GRANULARITY_MS)
+    .run();
+  return row;
+}
+
 async function authenticate(req: Request, env: Env): Promise<Auth | null> {
   const authz = req.headers.get('authorization');
   if (authz?.startsWith('Bearer ')) {
-    const tok = authz.slice(7).trim();
-    if (!tok.startsWith('fk_')) return null;
-    const hash = await sha256b64(tok);
-    const row = await env.DB.prepare(
-      'SELECT t.id, t.pid, p.handle, p.verified FROM api_tokens t JOIN players p ON p.pid = t.pid WHERE t.hash = ?',
-    )
-      .bind(hash)
-      .first<TokenAuthRow>();
-    if (!row) return null;
-    await env.DB.prepare('UPDATE api_tokens SET last_used = ? WHERE id = ?').bind(Date.now(), row.id).run();
-    return { s: { pid: row.pid, h: row.handle, v: !!row.verified, exp: Date.now() + 60000 }, via: 'token' };
+    // The JSON API takes personal tokens only. OAuth access tokens are for /mcp.
+    const row = await personalToken(env, authz.slice(7).trim());
+    return row ? { s: { pid: row.pid, h: row.handle, v: !!row.verified, exp: Date.now() + 60000 }, via: 'token' } : null;
   }
   const s = await verifySession(env, getCookie(req, 'fk_session'));
   return s ? { s, via: 'cookie' } : null;
@@ -149,6 +174,8 @@ async function demoLogin(req: Request, env: Env) {
 
 async function githubStart(req: Request, env: Env) {
   if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return err(503, "GitHub login isn't configured yet.");
+  // Signing in to connect an MCP client returns to that client's /authorize page afterwards.
+  const next = new URL(req.url).searchParams.get('next');
   const state = randomToken(18);
   const u = new URL('https://github.com/login/oauth/authorize');
   u.searchParams.set('client_id', env.GITHUB_CLIENT_ID);
@@ -156,10 +183,10 @@ async function githubStart(req: Request, env: Env) {
   u.searchParams.set('state', state);
   u.searchParams.set('allow_signup', 'true');
   // No scopes: identity only, public profile. Forklings never reads repos or activity.
-  return new Response(null, {
-    status: 302,
-    headers: { location: u.toString(), 'set-cookie': cookie('fk_oauth', state, 600, isSecure(req)) },
-  });
+  const headers = new Headers({ location: u.toString() });
+  headers.append('set-cookie', cookie('fk_oauth', state, 600, isSecure(req)));
+  if (isAuthorizeReturn(next)) headers.append('set-cookie', cookie('fk_next', next, 600, isSecure(req)));
+  return new Response(null, { status: 302, headers });
 }
 
 async function githubCallback(req: Request, env: Env) {
@@ -195,8 +222,10 @@ async function githubCallback(req: Request, env: Env) {
   await ensurePlayerRow(env, s, null, Number.isFinite(created) ? created : null);
   // A demo player who picked this handle loses it to the verified owner.
   await env.DB.prepare("UPDATE players SET handle = handle || '-demo' WHERE handle = ? AND verified = 0").bind(s.h).run();
-  const res = await startSession(req, env, s, '/');
+  const next = getCookie(req, 'fk_next');
+  const res = await startSession(req, env, s, isAuthorizeReturn(next) ? next : '/');
   res.headers.append('set-cookie', cookie('fk_oauth', '', 0, isSecure(req)));
+  if (next) res.headers.append('set-cookie', cookie('fk_next', '', 0, isSecure(req)));
   return res;
 }
 
@@ -340,14 +369,60 @@ function statusLine(v: PlayerView): string {
   return `${face} ${genome(c.seed).name} is ${c.mood}${warn}\n   food ${r(s.fullness)}% · mood ${r(s.mood)}% · energy ${r(s.energy)}% · Lv ${c.level}\n`;
 }
 
-// ---------- MCP ----------
-async function mcp(req: Request, env: Env) {
-  // Personal API tokens only: no cookies, so a web page can't drive the MCP endpoint.
-  const a = req.headers.get('authorization')?.startsWith('Bearer ') ? await authenticate(req, env) : null;
-  if (!a) return handleMcp(req, env, null);
-  const who = { pid: a.s.pid, h: a.s.h, v: a.s.v };
+// ---------- MCP and OAuth ----------
+/**
+ * /mcp after the resource server has checked the Bearer token (never a cookie, so a web page
+ * can't drive it). The handle is read fresh from D1, since it can change after a grant.
+ */
+async function mcp(req: Request, env: OAuthEnv, ctx: OAuthResourceContext<McpProps>): Promise<Response> {
+  const row = await env.DB.prepare('SELECT handle, verified FROM players WHERE pid = ?').bind(ctx.props.pid).first<PlayerRow>();
+  if (!row) return err(401, 'This player no longer exists.');
+  const who = { pid: ctx.props.pid, h: row.handle, v: !!row.verified };
   const me = await player(env, who);
-  return handleMcp(req, env, { player: me, handle: a.s.h, practiceBattle: () => runBattle(env, who, { practice: true }) });
+  return handleMcp(req, env, {
+    player: me,
+    handle: row.handle,
+    practiceBattle: () => runBattle(env, who, { practice: true }),
+    scopes: effectiveScopes(ctx.auth.scope),
+    insufficientScope: (scopes, description) => insufficientScope(ctx.auth, scopes, description),
+  });
+}
+
+const servers = oauthServers(mcp, personalToken);
+
+async function sessionOf(req: Request, env: Env): Promise<Signed | null> {
+  const s = await verifySession(env, getCookie(req, 'fk_session'));
+  return s ? { pid: s.pid, handle: s.h, verified: s.v } : null;
+}
+
+/** The player's Forkling as the consent page shows it. */
+async function forklingCard(env: Env, who: Signed): Promise<ForklingCard | null> {
+  const v = await (await player(env, { pid: who.pid, h: who.handle, v: who.verified })).view();
+  const c = v.creature;
+  if (!c) return null;
+  const g = genome(c.seed);
+  return {
+    name: g.name,
+    line: `@${who.handle}'s ${RARITY[g.rarity]} ${g.type}-type ${STAGE_NAMES[c.stage]}, level ${c.level}`,
+    portrait: await portrait(g, c.items, c.stage),
+  };
+}
+
+function oauthRoute(req: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> | null {
+  const p = url.pathname;
+  const isMcp = p === '/mcp' || p.startsWith('/.well-known/oauth-protected-resource');
+  const isAs = p.startsWith('/.well-known/oauth-authorization-server') || p.startsWith('/oauth/');
+  if (!isMcp && !isAs && p !== '/authorize') return null;
+  const oenv = withOAuthStore(env);
+  const { as, rs } = servers(publicOrigin(env, req));
+  if (isMcp) return rs.fetch(req, oenv, ctx);
+  if (isAs) return as.fetch(req, oenv, ctx);
+  return authorize(req, oenv, as, {
+    session: (r) => sessionOf(r, env),
+    forkling: (who) => forklingCard(env, who),
+    github: !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET),
+    consentSecret: `forklings-consent|${env.SESSION_SECRET}`,
+  });
 }
 
 // ---------- router ----------
@@ -426,16 +501,36 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     case p.startsWith('/api/tokens/') && m === 'DELETE':
       await env.DB.prepare('DELETE FROM api_tokens WHERE id = ? AND pid = ?').bind(p.slice('/api/tokens/'.length), a.s.pid).run();
       return json({ ok: true });
+    // Apps connected over OAuth (Claude Code, Codex, Pi...). Managed from the website only.
+    case p === '/api/connections' && m === 'GET': {
+      if (a.via !== 'cookie') return err(403, 'Manage connected apps from the website.');
+      const oenv = withOAuthStore(env);
+      return json({ connections: await listConnections(servers(origin(req, env)).as.getOAuthApi(oenv), oenv, a.s.pid) });
+    }
+    case p.startsWith('/api/connections/') && m === 'DELETE': {
+      if (a.via !== 'cookie') return err(403, 'Manage connected apps from the website.');
+      const oenv = withOAuthStore(env);
+      await revokeConnection(
+        servers(origin(req, env)).as.getOAuthApi(oenv),
+        a.s.pid,
+        decodeURIComponent(p.slice('/api/connections/'.length)),
+      );
+      return json({ ok: true });
+    }
   }
   return err(404, 'Not found.');
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     try {
       if (url.pathname.startsWith('/api/')) return await api(req, env, url);
-      if (url.pathname === '/mcp') return await mcp(req, env);
+      const o = oauthRoute(req, env, ctx, url);
+      if (o) return await o;
+      // Other discovery documents (OpenID Connect, for one) don't exist here; say so in JSON
+      // rather than letting the single-page app answer 200 with HTML.
+      if (url.pathname.startsWith('/.well-known/')) return err(404, 'Not found.');
       if (url.pathname === '/auth/demo' && req.method === 'POST') return await demoLogin(req, env);
       if (url.pathname === '/auth/github') return await githubStart(req, env);
       if (url.pathname === '/auth/github/callback') return await githubCallback(req, env);
@@ -449,5 +544,7 @@ export default {
   },
   async scheduled(ctl: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(npcTick(env, ctl.scheduledTime));
+    // Once an hour (the cron runs every 20 minutes): drop expired OAuth codes, tokens and grants.
+    if (new Date(ctl.scheduledTime).getUTCMinutes() < 20) ctx.waitUntil(new D1KV(env.DB).purgeExpired());
   },
 } satisfies ExportedHandler<Env>;

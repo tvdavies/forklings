@@ -1,5 +1,6 @@
 // CI check for the Claude Code marketplace and plugin manifests: that they parse,
-// that names and paths line up, and that the MCP server points at production.
+// that names and paths line up, and that the MCP server points at production and signs
+// in with OAuth (a configured Authorization header would stop Claude Code offering sign-in).
 // Locally, `claude plugin validate --strict .` does the full check.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,6 +22,8 @@ for (const entry of market.plugins) {
   const mcp = read(join(root, '.mcp.json'));
   for (const [name, server] of Object.entries(mcp.mcpServers ?? {})) {
     if (server.type !== 'http' || !server.url?.startsWith('https://')) fail(`${name}: expected an https streamable HTTP server`);
+    if (server.headers || server.headersHelper) fail(`${name}: no headers; the server signs in with OAuth`);
+    if (server.oauth?.scopes) fail(`${name}: don't pin oauth.scopes; the server names the scopes it needs`);
     for (const ref of JSON.stringify(server).matchAll(/\$\{user_config\.(\w+)\}/g))
       if (!manifest.userConfig?.[ref[1]]) fail(`${name}: uses undeclared user_config.${ref[1]}`);
   }
