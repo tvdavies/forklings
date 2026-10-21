@@ -1,6 +1,6 @@
 # Architecture
 
-Forklings is one Cloudflare Worker. Each player's state lives in their own SQLite-backed Durable Object. D1 holds only what crosses players: the handle directory, leaderboard, API tokens and battle analytics. No global tick runs: needs and growth are worked out from timestamps when someone looks.
+Forklings is one Cloudflare Worker. Each player's state lives in their own SQLite-backed Durable Object. D1 holds only what crosses players: the handle directory, leaderboard, API tokens, OAuth grants and battle analytics. No global tick runs: needs and growth are worked out from timestamps when someone looks.
 
 ```
 browser / PWA ──┐                     ┌─ PlayerDO (one per player, SQLite)
@@ -78,12 +78,15 @@ Coaching tactics and [strategy scripts](strategy-scripts.md) both compile to the
 - **GitHub OAuth** is for identity only: the scope is empty, and the game reads only the user's id, login and account creation date.
 - **Demo sign-in** creates `demo:<random id>` players with an *unverified* badge, limited to 5 per network per day.
 - **Sessions** are HMAC-signed cookies (`SESSION_SECRET`).
-- **API tokens** (`fk_…`) are stored only as SHA-256 hashes, capped at 5 per player and revocable from the API tab. They authorise the JSON API, `/mcp` and the status line.
+- **OAuth for MCP clients** (`src/worker/oauth.ts`): Forklings is an OAuth 2.1 authorization server for `/mcp`, built on `@cloudflare/workers-oauth-provider`. Clients discover it from the `401` (RFC 9728 protected resource metadata, RFC 8414 server metadata), identify themselves with a Client ID Metadata Document or Dynamic Client Registration, and sign in with PKCE (S256 only) and a resource indicator. `/authorize` is our own page: sign in with the existing GitHub session, then a consent page naming the app (its verified domain, or *unverified* for a self-registered name), where the access goes (a loopback address is called out as *your computer*), the Forkling and each scope. Consent is remembered for 30 days per app and player, for the same or fewer scopes. Access tokens last 8 hours; refresh tokens rotate and lapse after 30 days unused. The API tab lists connected apps and revokes them.
+- **Scopes** (`src/worker/scopes.ts`): `pet:read` (always granted), `pet:care`, `strategy:read`, `strategy:write` (implies `strategy:read`), `battle:read`, `battle:spar` and `battle:simulate` (reserved; no tool yet). Each MCP tool needs one; `tools/list` hides the rest, and calling one returns `403 insufficient_scope` with the scopes to ask for.
+- **OAuth storage**: the library stores clients, grants and tokens through a KV interface. `src/worker/d1kv.ts` implements that interface on the D1 table `oauth_kv`, so there's no KV namespace: D1 writes are a fifth of KV's price, and revocation is immediate because D1 is consistent. Secrets are stored as hashes and grant props are encrypted by the library. The hourly cron deletes expired rows.
+- **API tokens** (`fk_…`) are stored only as SHA-256 hashes, capped at 5 per player and revocable from the API tab. They're for headless use (scripts, CI and the status line): they authorise the JSON API and `/mcp` with every scope. OAuth access tokens are accepted only on `/mcp`.
 
 ## MCP
 
-`/mcp` implements Streamable HTTP in its stateless JSON-response form: `initialize`, `ping`, `tools/list` and `tools/call` on POST; GET returns 405; a missing or bad token returns 401. Its tools are `get_forkling` (with an optional PNG portrait), `care_for_forkling`, `get_strategy`, `set_strategy`, `list_battles` and `practice_battle`.
+`/mcp` implements Streamable HTTP in its stateless JSON-response form: `initialize`, `ping`, `tools/list` and `tools/call` on POST; GET returns 405; a missing or bad token returns 401 with the OAuth discovery challenge. Its tools are `get_forkling` (with an optional PNG portrait), `care_for_forkling`, `get_strategy`, `set_strategy`, `list_battles` and `practice_battle`.
 
 ## Costs
 
-Every request runs on the Workers plan the account already has. D1 rows are small, and reads stay within the included quota at hobby scale. An idle player does no work at all. The cron does a bounded amount of NPC work every 20 minutes.
+Every request runs on the Workers plan the account already has. D1 rows are small, and reads stay within the included quota at hobby scale. An idle player does no work at all. The cron does a bounded amount of NPC work every 20 minutes. A connected MCP client costs about three D1 row writes per 8 hours of use: a refresh writes its grant and a new access token, and the cron later deletes the expired one. The paid plan includes 50 million row writes a month.

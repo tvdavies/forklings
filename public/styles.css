@@ -158,3 +158,20 @@ input[type=range]{width:100%;max-width:420px;accent-color:var(--butter);height:2
   .stat{grid-template-columns:76px 1fr 40px}
 }
 @media (prefers-reduced-motion:reduce){.view{animation:none}.card{transition:opacity .2s}.bar i{transition:none}}
+
+/* OAuth sign-in and consent (/authorize, rendered by the Worker) */
+body.oauth main.consent{max-width:560px;padding-bottom:40px}
+.consent-box{padding:22px 24px}
+.consent-box h1{font-size:clamp(26px,5vw,34px);margin-bottom:.5em}
+.consent-box .hl{color:var(--butter)}
+.consent-box .app-id{font-size:15px}
+.consent-box .pet{display:flex;align-items:center;gap:14px;background:var(--dusk);padding:10px 14px;margin:6px 0 14px}
+.consent-box .pet img{image-rendering:pixelated;width:96px;height:96px;flex:none}
+.consent-box fieldset{border:0;margin:0 0 10px;padding:0}
+.consent-box legend{font:600 18px/1 var(--f-pixel);color:var(--haze);margin-bottom:6px;padding:0}
+.consent-box .scopes{list-style:none;margin:0;padding:0}
+.consent-box .scopes li{padding:6px 0;border-bottom:2px solid var(--dusk3);font-size:15px}
+.consent-box .scopes label{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.consent-box .scopes input[type=checkbox]{width:20px;height:20px;margin-top:2px;accent-color:var(--butter);flex:none}
+.consent-box .tick{display:inline-block;width:20px;color:var(--mint);margin-right:6px}
+.consent-box .row{margin-top:14px}

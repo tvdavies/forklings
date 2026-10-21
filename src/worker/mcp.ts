@@ -1,7 +1,9 @@
 // Remote MCP server at /mcp, over Streamable HTTP. Stateless JSON responses (no SSE
-// stream, no session id): every request carries the player's personal API token as a
-// Bearer token, and each tool call goes to that player's Durable Object, the same
-// path the web app uses, so validation and game rules are identical.
+// stream, no session id). Every request carries a Bearer token, checked before this file
+// sees it (src/worker/oauth.ts): an OAuth access token, or a personal `fk_` token for
+// headless use. Each tool needs one scope; tools/list shows only the tools the token may
+// call. Each tool call goes to that player's Durable Object, the same path the web app
+// uses, so validation and game rules are identical.
 
 import { HELD_EFFECTS } from '../shared/battle';
 import { compose, ITEMS } from '../shared/compose';
@@ -11,9 +13,10 @@ import { base64, centreSprite, encodePng, paintSprite } from '../shared/png';
 import type { BattleOutcome } from './battle';
 import type { Env } from './env';
 import type { BattleRow, CareOutcome, PlayerView, ScriptResult, TacticsResult } from './player';
+import type { Scope } from './scopes';
 
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
-const SERVER_INFO = { name: 'forklings', title: 'Forklings', version: '1.0.0' };
+const SERVER_INFO = { name: 'forklings', title: 'Forklings', version: '1.1.0' };
 const INSTRUCTIONS = `Forklings is a virtual pet and auto-battler for developers (https://forklings.dev).
 Each player has one Forkling. Its needs (fullness, mood, energy) drift over time; care actions restore them.
 Battles are automatic: the Forkling follows its strategy (coaching tactics or a short rule script).
@@ -39,13 +42,27 @@ export interface McpDeps {
   player: McpPlayer;
   handle: string;
   practiceBattle(): Promise<{ ok: true; out: BattleOutcome } | { ok: false; error: string }>;
+  /** The scopes the token carries, with implied scopes added. */
+  scopes: ReadonlySet<Scope>;
+  /** The HTTP 403 insufficient_scope challenge that asks the client to re-authorise for `scopes`. */
+  insufficientScope(scopes: string[], description: string): Response;
 }
 
 type ToolContent = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string };
 type ToolResult = { content: ToolContent[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 
-const TOOLS = [
+interface Tool {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  annotations: Record<string, boolean>;
+}
+
+/** Each tool and the one scope it needs (the architecture proposal's scope model). */
+const TOOLS: (Tool & { scope: Scope })[] = [
   {
+    scope: 'pet:read',
     name: 'get_forkling',
     title: 'Check on my Forkling',
     description:
@@ -58,6 +75,7 @@ const TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    scope: 'pet:care',
     name: 'care_for_forkling',
     title: 'Care for my Forkling',
     description: 'Feed, play with, pat, or put your Forkling down for a nap (nap again to wake it). Each action has a short cooldown.',
@@ -70,6 +88,7 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
+    scope: 'strategy:read',
     name: 'get_strategy',
     title: 'Read battle strategy',
     description:
@@ -78,6 +97,7 @@ const TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    scope: 'strategy:write',
     name: 'set_strategy',
     title: 'Change battle strategy',
     description: `Set either coaching tactics or a strategy script (exactly one). The server validates it the same way the web app does and reports the line and column of any script error.\n\n${SCRIPT_HELP}`,
@@ -102,6 +122,7 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
+    scope: 'battle:read',
     name: 'list_battles',
     title: 'Recent battles',
     description: 'Your most recent battles, including ones other players or NPCs started against you, with a one-line summary each.',
@@ -113,6 +134,7 @@ const TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    scope: 'battle:spar',
     name: 'practice_battle',
     title: 'Practice battle',
     description:
@@ -134,7 +156,8 @@ function bar(v: number) {
   return '█'.repeat(n) + '░'.repeat(10 - n);
 }
 
-async function portrait(g: Genome, items: Record<string, string | null>, stage: number) {
+/** A 256×256 PNG portrait of a Forkling, base64. Also shown on the OAuth consent page. */
+export async function portrait(g: Genome, items: Record<string, string | null>, stage: number) {
   const { cols } = compose({ ...g, items }, { stage });
   return base64(await encodePng(256, 256, paintSprite(centreSprite(cols), 256, 7, '#271d3b')));
 }
@@ -277,19 +300,14 @@ async function callTool(name: string, args: unknown, d: McpDeps): Promise<ToolRe
 const rpc = (id: unknown, result: unknown) => ({ jsonrpc: '2.0', id, result });
 const rpcErr = (id: unknown, code: number, message: string) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 
-/** Handle one Streamable HTTP request. `deps` is null when the token is missing or wrong. */
-export async function handleMcp(req: Request, env: Env, deps: McpDeps | null): Promise<Response> {
+/** Handle one Streamable HTTP request from an authenticated client. */
+export async function handleMcp(req: Request, env: Env, deps: McpDeps): Promise<Response> {
   const headers = { 'content-type': 'application/json', 'cache-control': 'no-store' };
   // Browsers send Origin; refuse other sites (DNS-rebinding guard). CLI clients send none.
   const o = req.headers.get('origin');
   if (o && o !== new URL(req.url).origin && o !== env.PUBLIC_ORIGIN)
     return new Response(JSON.stringify(rpcErr(null, -32600, 'Origin not allowed')), { status: 403, headers });
   if (req.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'POST' } });
-  if (!deps)
-    return new Response(JSON.stringify(rpcErr(null, -32001, 'Missing or invalid token. Create one at https://forklings.dev/#api')), {
-      status: 401,
-      headers: { ...headers, 'www-authenticate': 'Bearer realm="forklings", error="invalid_token"' },
-    });
 
   let msg: unknown;
   try {
@@ -320,11 +338,20 @@ export async function handleMcp(req: Request, env: Env, deps: McpDeps | null): P
     case 'ping':
       return reply(rpc(msg.id, {}));
     case 'tools/list':
-      return reply(rpc(msg.id, { tools: TOOLS }));
+      // Only the tools this token may call, so the model never reaches for one it can't use.
+      return reply(rpc(msg.id, { tools: TOOLS.filter((t) => deps.scopes.has(t.scope)).map(({ scope: _, ...t }) => t) }));
     case 'tools/call': {
       const name = prop(msg.params, 'name');
+      const tool = TOOLS.find((t) => t.name === name);
       // Every tool name is a string, so the typeof check changes nothing; it narrows `name` for callTool.
-      if (typeof name !== 'string' || !TOOLS.some((t) => t.name === name)) return reply(rpcErr(msg.id, -32602, `Unknown tool: ${name}`));
+      if (typeof name !== 'string' || !tool) return reply(rpcErr(msg.id, -32602, `Unknown tool: ${name}`));
+      if (!deps.scopes.has(tool.scope))
+        // Name every scope the client should hold afterwards, so a client that doesn't merge
+        // scopes itself still keeps what the player already granted.
+        return deps.insufficientScope(
+          [...new Set([...deps.scopes, tool.scope])],
+          `${tool.title} needs the ${tool.scope} permission, which this connection wasn't given.`,
+        );
       try {
         return reply(rpc(msg.id, await callTool(name, prop(msg.params, 'arguments') ?? {}, deps)));
       } catch (e) {

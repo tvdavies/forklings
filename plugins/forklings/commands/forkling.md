@@ -14,4 +14,4 @@ Do exactly one of these, then reply in two or three short, playful lines. Use th
 - `strategy`: call `get_strategy` and explain the current plan in plain words.
 - Anything else about how it fights (for example "heal earlier" or "be more aggressive"): call `get_strategy`, write a new strategy script that makes that change, show it to the user, and only call `set_strategy` once they agree. If the server reports an error, fix the script and try again.
 
-If a tool says the token is missing or invalid, tell the user to create a token at https://forklings.dev (API tab) and set it with `/plugin` → Forklings → configure.
+If the `forklings` tools aren't available, or a call says the server needs authentication, tell the user to run `/mcp`, pick `forklings` and choose Authenticate, then sign in with GitHub in the browser. If a call says it needs additional permissions (for example changing the strategy), they can grant it the same way: `/mcp`, `forklings`, Re-authenticate, and leave that permission ticked.

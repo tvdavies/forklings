@@ -101,6 +101,27 @@ interface TokenRow {
   created_at: number;
   last_used: number | null;
 }
+/** An app connected over OAuth (see src/worker/oauth.ts). */
+interface ConnectionRow {
+  id: string;
+  client: string;
+  domain: string | null;
+  redirectHost: string;
+  local: boolean;
+  scopes: string[];
+  connectedAt: number;
+  lastActive: number | null;
+}
+/** Short labels for the OAuth scopes, as the connected-apps list shows them. */
+const SCOPE_LABEL: Record<string, string> = {
+  'pet:read': 'see',
+  'pet:care': 'care',
+  'strategy:read': 'read strategy',
+  'strategy:write': 'coach',
+  'battle:read': 'battle log',
+  'battle:spar': 'spar',
+  'battle:simulate': 'simulate',
+};
 
 /** The page's fixed elements (see public/index.html); pass the element type when it matters. */
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -162,7 +183,10 @@ function show(v: string) {
   if (v === 'coach') renderCoach();
   if (v === 'battle') renderBattleLog();
   if (v === 'ranks') renderRanks();
-  if (v === 'api') renderTokens();
+  if (v === 'api') {
+    renderConnections();
+    renderTokens();
+  }
   window.scrollTo(0, 0);
 }
 function route() {
@@ -556,6 +580,37 @@ async function renderRanks() {
   const r = await api<{ players: LeaderRow[]; unranked?: LeaderRow[] }>('/api/leaderboard');
   rankList($('ranks'), r.players, true);
   rankList($('ranksU'), r.unranked || [], false);
+}
+
+// ---------- connected apps ----------
+async function renderConnections() {
+  const ul = $('connList');
+  let rows: ConnectionRow[];
+  try {
+    rows = (await api<{ connections: ConnectionRow[] }>('/api/connections')).connections;
+  } catch (err) {
+    ul.innerHTML = `<li class="dim">${esc(errMsg(err))}</li>`;
+    return;
+  }
+  ul.innerHTML = rows.length
+    ? rows
+        .map((c) => {
+          const who = c.domain ? `${c.domain}` : `unverified${c.local ? ', on your computer' : ` · ${c.redirectHost}`}`;
+          const can = c.scopes
+            .map((s) => SCOPE_LABEL[s])
+            .filter(Boolean)
+            .join(', ');
+          const seen = c.lastActive ? ` · active ${new Date(c.lastActive).toLocaleString()}` : '';
+          return `<li><div><span class="res">${esc(c.client)}</span><div class="meta">${esc(who)} · can ${esc(can || 'see')}</div><div class="meta">connected ${new Date(c.connectedAt).toLocaleDateString()}${seen}</div></div><button class="btn ghost" data-disconnect="${esc(c.id)}" data-name="${esc(c.client)}" type="button">Disconnect</button></li>`;
+        })
+        .join('')
+    : '<li class="dim">No apps connected yet.</li>';
+  for (const b of ul.querySelectorAll<HTMLElement>('[data-disconnect]'))
+    b.addEventListener('click', async () => {
+      if (!confirm(`Disconnect ${b.dataset.name}? It stops working at once and has to sign in again.`)) return;
+      await api(`/api/connections/${encodeURIComponent(b.dataset.disconnect ?? '')}`, { method: 'DELETE' });
+      renderConnections();
+    });
 }
 
 // ---------- tokens ----------
