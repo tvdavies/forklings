@@ -1,5 +1,5 @@
-import type { PlayerDO } from './player';
 import type { BattleDO } from './battle';
+import type { PlayerDO } from './player';
 
 export interface Env {
   ASSETS: Fetcher;

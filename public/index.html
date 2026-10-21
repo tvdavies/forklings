@@ -102,6 +102,14 @@
       </fieldset>
       <div class="row"><button class="btn" type="submit">Save plan</button><span class="toastline" id="coachMsg" aria-live="polite"></span></div>
     </form>
+    <details class="panel script" id="scriptPanel">
+      <summary class="lbl">Write a strategy script <span class="dim" id="scriptState"></span></summary>
+      <p class="small dim">Rules are tried top to bottom; the first whose condition holds and whose move is ready wins. Conditions use <code>hp</code>, <code>foe_hp</code> (percent), <code>turn</code>, <code>heals_left</code>, <code>foe_heals_left</code>, <code>level</code>, <code>foe_level</code>, <code>chance N</code>, <code>ready special|heal</code>, <code>focused</code>, <code>foe_guarding</code>, with <code>and</code>, <code>or</code>, <code>not</code>. Moves: <code>strike</code>, <code>special</code>, <code>guard</code>, <code>heal</code>. Saving the plan above switches back to tactics.</p>
+      <form id="scriptForm">
+        <textarea id="scriptSrc" class="code" rows="9" spellcheck="false" autocapitalize="off" aria-label="Strategy script"></textarea>
+        <div class="row"><button class="btn" type="submit">Save script</button><span class="toastline" id="scriptMsg" aria-live="polite"></span></div>
+      </form>
+    </details>
   </section>
 
   <section class="view" id="v-battle" hidden>
@@ -134,18 +142,26 @@
   </section>
 
   <section class="view" id="v-api" hidden>
-    <h2>API tokens</h2>
-    <p class="dim">For tools such as a future Claude Code, Pi or Codex integration. Send <code>Authorization: Bearer fk_…</code> to the JSON API.</p>
+    <h2>Connect your tools</h2>
+    <p class="dim">Look after your Forkling from Claude Code, Pi, Codex or any MCP client. Create a personal token here; revoke it any time and it stops working at once.</p>
     <div class="panel">
       <form class="row" id="tokenForm"><input class="handle wide" id="tokenName" placeholder="Token name, e.g. laptop" maxlength="40"><button class="btn" type="submit">Create token</button></form>
       <p class="tokenout" id="tokenOut" hidden></p>
       <ul class="log" id="tokenList"></ul>
     </div>
-    <h3 class="sub">Endpoints</h3>
+    <h3 class="sub">Claude Code</h3>
+    <pre class="term">/plugin marketplace add tvdavies/forklings
+/plugin install forklings@forklings
+# paste your token when asked, then try /forklings:forkling</pre>
+    <h3 class="sub">Any MCP client</h3>
+    <p class="small dim">Streamable HTTP at <code>https://forklings.dev/mcp</code> with the header <code>Authorization: Bearer fk_…</code>.</p>
+    <h3 class="sub">JSON API</h3>
     <pre class="term" id="apiDocs">GET  /api/me                 your Forkling, needs and wardrobe
 POST /api/care      {"action":"feed"|"play"|"pat"|"nap"}
 POST /api/equip     {"slot":"head","item":"beanie"|null}
 POST /api/tactics   {"aggression":60,"special":"open","healAt":25,"style":"balanced"}
+POST /api/script    {"script":"when hp &lt; 40: heal\notherwise: strike"}
+GET  /api/status-line          two lines of text for a terminal status bar
 POST /api/battle               fight now, returns the outcome and replay seed
 GET  /api/battles              your battle log
 GET  /api/battles/:id          replay: seed + both snapshots

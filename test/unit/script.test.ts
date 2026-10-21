@@ -1,8 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { parseScript, formatStrategy, tacticsAsScript, ScriptError, MAX_SCRIPT_CHARS } from '../../src/shared/script';
-import { compileTactics, decide, DEFAULT_TACTICS, MAX_RULES } from '../../src/shared/strategy';
+import { formatStrategy, MAX_SCRIPT_CHARS, parseScript, ScriptError, tacticsAsScript } from '../../src/shared/script';
+import { compileTactics, DEFAULT_TACTICS, decide, MAX_RULES } from '../../src/shared/strategy';
 
-const ctx = (o: Record<string, unknown> = {}) => ({ hp: 100, foe_hp: 100, turn: 1, heals_left: 2, foe_heals_left: 2, level: 1, foe_level: 1, specialReady: true, focused: false, foeGuarding: false, rng: () => 0.5, ...o });
+const ctx = (o: Record<string, unknown> = {}) => ({
+  hp: 100,
+  foe_hp: 100,
+  turn: 1,
+  heals_left: 2,
+  foe_heals_left: 2,
+  level: 1,
+  foe_level: 1,
+  specialReady: true,
+  focused: false,
+  foeGuarding: false,
+  rng: () => 0.5,
+  ...o,
+});
 
 const SAMPLE = `# Heal early, finish with the special.
 style steady
@@ -59,8 +72,13 @@ describe('strategy scripts', () => {
       ['when constructor < 1: heal', 1, 6],
     ];
     for (const [src, line, col] of cases) {
-      try { parseScript(src); throw new Error('parsed: ' + src); }
-      catch (e) { expect(e).toBeInstanceOf(ScriptError); expect([(e as ScriptError).line, (e as ScriptError).col]).toEqual([line, col]); }
+      try {
+        parseScript(src);
+        throw new Error(`parsed: ${src}`);
+      } catch (e) {
+        expect(e).toBeInstanceOf(ScriptError);
+        expect([(e as ScriptError).line, (e as ScriptError).col]).toEqual([line, col]);
+      }
     }
   });
 
@@ -72,7 +90,12 @@ describe('strategy scripts', () => {
   });
 
   test('never evaluates input as code', () => {
-    for (const src of ['when process.exit(1): strike', 'when hp < 1; globalThis.x = 1: strike', 'when `x`: strike', "when hp < eval('1'): strike"])
+    for (const src of [
+      'when process.exit(1): strike',
+      'when hp < 1; globalThis.x = 1: strike',
+      'when `x`: strike',
+      "when hp < eval('1'): strike",
+    ])
       expect(() => parseScript(src)).toThrow(ScriptError);
   });
 });

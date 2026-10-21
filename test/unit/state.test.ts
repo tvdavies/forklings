@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { advance, care, newState, stageForXp, levelForXp, STAGE_XP, MAX_CATCHUP_MS, moodWord } from '../../src/shared/state';
+import { advance, care, levelForXp, MAX_CATCHUP_MS, moodWord, newState, STAGE_XP, stageForXp } from '../../src/shared/state';
 
 const H = 3600 * 1000;
 const T0 = Date.UTC(2026, 9, 21, 0, 0, 0);
@@ -29,7 +29,10 @@ describe('lazy pet state', () => {
 
   test('values stay within 0..100 and catch-up is capped', () => {
     const s = advance(newState(T0), T0 + 400 * 24 * H);
-    for (const k of ['fullness', 'mood', 'energy'] as const) { expect(s[k]).toBeGreaterThanOrEqual(0); expect(s[k]).toBeLessThanOrEqual(100); }
+    for (const k of ['fullness', 'mood', 'energy'] as const) {
+      expect(s[k]).toBeGreaterThanOrEqual(0);
+      expect(s[k]).toBeLessThanOrEqual(100);
+    }
     const capped = advance(newState(T0), T0 + MAX_CATCHUP_MS);
     expect(s.xp).toBeCloseTo(capped.xp, 6);
   });
@@ -50,14 +53,17 @@ describe('care actions', () => {
   test('feeding fills up and gives XP only when hungry', () => {
     const hungry = { ...newState(T0), fullness: 30 };
     const r = care(hungry, 'feed', T0);
-    expect(r.ok).toBe(true); expect(r.state.fullness).toBe(65); expect(r.xpGain).toBeGreaterThan(0);
+    expect(r.ok).toBe(true);
+    expect(r.state.fullness).toBe(65);
+    expect(r.xpGain).toBeGreaterThan(0);
     expect(care({ ...newState(T0), fullness: 98 }, 'feed', T0).ok).toBe(false);
   });
 
   test('play needs energy', () => {
     expect(care({ ...newState(T0), energy: 5 }, 'play', T0).ok).toBe(false);
     const r = care(newState(T0), 'play', T0);
-    expect(r.ok).toBe(true); expect(r.state.energy).toBe(68);
+    expect(r.ok).toBe(true);
+    expect(r.state.energy).toBe(68);
   });
 
   test('a napping pet ignores everything except waking', () => {
@@ -77,13 +83,21 @@ describe('growth and evolution', () => {
 
   test('a well-fed pet grows passively over time', () => {
     let s = newState(T0);
-    for (let h = 1; h <= 24; h++) { s = advance(s, T0 + h * H); if (s.fullness < 60) s = care(s, 'feed', T0 + h * H).state; if (s.mood < 60) s = care(s, 'pat', T0 + h * H).state; }
+    for (let h = 1; h <= 24; h++) {
+      s = advance(s, T0 + h * H);
+      if (s.fullness < 60) s = care(s, 'feed', T0 + h * H).state;
+      if (s.mood < 60) s = care(s, 'pat', T0 + h * H).state;
+    }
     expect(s.xp).toBeGreaterThan(STAGE_XP[1]);
     expect(stageForXp(s.xp)).toBeGreaterThanOrEqual(1);
   });
 
   test('level rises monotonically with XP', () => {
     let last = 0;
-    for (let xp = 0; xp < 5000; xp += 7) { const l = levelForXp(xp); expect(l).toBeGreaterThanOrEqual(last); last = l; }
+    for (let xp = 0; xp < 5000; xp += 7) {
+      const l = levelForXp(xp);
+      expect(l).toBeGreaterThanOrEqual(last);
+      last = l;
+    }
   });
 });

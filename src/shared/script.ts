@@ -13,7 +13,18 @@
 //
 // Rules are tried top to bottom. The first rule whose condition holds and whose
 // action can be used this turn wins. If none does, the Forkling strikes.
-import { type Action, type Expr, type Strategy, type Style, type Tactics, type Val, type Var, MAX_RULES, compileTactics, sanitiseStrategy } from './strategy';
+import {
+  type Action,
+  compileTactics,
+  type Expr,
+  MAX_RULES,
+  type Strategy,
+  type Style,
+  sanitiseStrategy,
+  type Tactics,
+  type Val,
+  type Var,
+} from './strategy';
 
 export const MAX_SCRIPT_CHARS = 4000;
 const VARS: readonly Var[] = ['hp', 'foe_hp', 'turn', 'heals_left', 'foe_heals_left', 'level', 'foe_level'];
@@ -23,12 +34,21 @@ const CMPS = ['<', '<=', '>', '>=', '==', '!='] as const;
 type Cmp = (typeof CMPS)[number];
 
 export class ScriptError extends Error {
-  constructor(message: string, readonly line: number, readonly col: number) {
+  constructor(
+    message: string,
+    readonly line: number,
+    readonly col: number,
+  ) {
     super(`line ${line}, column ${col}: ${message}`);
   }
 }
 
-interface Tok { t: 'word' | 'num' | 'op' | 'eol'; v: string; line: number; col: number }
+interface Tok {
+  t: 'word' | 'num' | 'op' | 'eol';
+  v: string;
+  line: number;
+  col: number;
+}
 
 function tokenize(src: string): Tok[] {
   const out: Tok[] = [];
@@ -39,21 +59,38 @@ function tokenize(src: string): Tok[] {
     while (i < s.length) {
       const ch = s[i];
       const col = i + 1;
-      if (ch === ' ' || ch === '\t') { i++; continue; }
+      if (ch === ' ' || ch === '\t') {
+        i++;
+        continue;
+      }
       if (ch === '#') break;
       if (/[a-z_]/i.test(ch)) {
-        let j = i; while (j < s.length && /[a-z0-9_]/i.test(s[j])) j++;
-        out.push({ t: 'word', v: s.slice(i, j).toLowerCase(), line: ln + 1, col }); i = j; continue;
+        let j = i;
+        while (j < s.length && /[a-z0-9_]/i.test(s[j])) j++;
+        out.push({ t: 'word', v: s.slice(i, j).toLowerCase(), line: ln + 1, col });
+        i = j;
+        continue;
       }
       if (/[0-9]/.test(ch)) {
-        let j = i; while (j < s.length && /[0-9.]/.test(s[j])) j++;
+        let j = i;
+        while (j < s.length && /[0-9.]/.test(s[j])) j++;
         const v = s.slice(i, j);
         if (!/^\d+(\.\d+)?$/.test(v)) throw new ScriptError(`"${v}" isn't a number`, ln + 1, col);
-        out.push({ t: 'num', v, line: ln + 1, col }); i = j; continue;
+        out.push({ t: 'num', v, line: ln + 1, col });
+        i = j;
+        continue;
       }
       const two = s.slice(i, i + 2);
-      if (['<=', '>=', '==', '!='].includes(two)) { out.push({ t: 'op', v: two, line: ln + 1, col }); i += 2; continue; }
-      if ('<>():'.includes(ch)) { out.push({ t: 'op', v: ch, line: ln + 1, col }); i++; continue; }
+      if (['<=', '>=', '==', '!='].includes(two)) {
+        out.push({ t: 'op', v: two, line: ln + 1, col });
+        i += 2;
+        continue;
+      }
+      if ('<>():'.includes(ch)) {
+        out.push({ t: 'op', v: ch, line: ln + 1, col });
+        i++;
+        continue;
+      }
       throw new ScriptError(`unexpected "${ch}"`, ln + 1, col);
     }
     out.push({ t: 'eol', v: '', line: ln + 1, col: s.length + 1 });
@@ -69,9 +106,14 @@ export function parseScript(src: string): Strategy {
   let depth = 0;
   const peek = () => toks[p];
   const next = () => toks[p++];
-  const fail = (msg: string, t: Tok = peek()): never => { throw new ScriptError(msg, t.line, t.col); };
+  const fail = (msg: string, t: Tok = peek()): never => {
+    throw new ScriptError(msg, t.line, t.col);
+  };
   const isWord = (v: string) => peek().t === 'word' && peek().v === v;
-  const expectOp = (v: string) => { const t = next(); if (t.t !== 'op' || t.v !== v) fail(`expected "${v}"`, t); };
+  const expectOp = (v: string) => {
+    const t = next();
+    if (t.t !== 'op' || t.v !== v) fail(`expected "${v}"`, t);
+  };
 
   const val = (): Val => {
     const t = next();
@@ -91,16 +133,25 @@ export function parseScript(src: string): Strategy {
     }
     if (t.t === 'word') {
       switch (t.v) {
-        case 'true': case 'always': next(); return { op: 'true' };
-        case 'focused': next(); return { op: 'focused' };
-        case 'foe_guarding': next(); return { op: 'foe_guarding' };
+        case 'true':
+        case 'always':
+          next();
+          return { op: 'true' };
+        case 'focused':
+          next();
+          return { op: 'focused' };
+        case 'foe_guarding':
+          next();
+          return { op: 'foe_guarding' };
         case 'chance': {
-          next(); const n = next();
+          next();
+          const n = next();
           if (n.t !== 'num' || Number(n.v) > 100) fail('chance takes a percentage from 0 to 100', n);
           return { op: 'chance', p: Number(n.v) };
         }
         case 'ready': {
-          next(); const m = next();
+          next();
+          const m = next();
           if (m.t !== 'word' || (m.v !== 'special' && m.v !== 'heal')) fail('ready takes "special" or "heal"', m);
           return { op: 'ready', move: m.v as 'special' | 'heal' };
         }
@@ -111,17 +162,39 @@ export function parseScript(src: string): Strategy {
     if (op.t !== 'op' || !(CMPS as readonly string[]).includes(op.v)) fail('expected a comparison: < <= > >= == !=', op);
     return { op: op.v as Cmp, a, b: val() };
   };
-  const not = (): Expr => (isWord('not') ? (next(), { op: 'not', a: not() }) : atom());
-  const and = (): Expr => { let e = not(); while (isWord('and')) { next(); e = { op: 'and', a: e, b: not() }; } return e; };
-  const or = (): Expr => { let e = and(); while (isWord('or')) { next(); e = { op: 'or', a: e, b: and() }; } return e; };
+  const not = (): Expr => {
+    if (!isWord('not')) return atom();
+    next();
+    return { op: 'not', a: not() };
+  };
+  const and = (): Expr => {
+    let e = not();
+    while (isWord('and')) {
+      next();
+      e = { op: 'and', a: e, b: not() };
+    }
+    return e;
+  };
+  const or = (): Expr => {
+    let e = and();
+    while (isWord('or')) {
+      next();
+      e = { op: 'or', a: e, b: and() };
+    }
+    return e;
+  };
 
   let style: Style = 'balanced';
   const rules: Strategy['rules'] = [];
   while (p < toks.length) {
     const t = peek();
-    if (t.t === 'eol') { next(); continue; }
+    if (t.t === 'eol') {
+      next();
+      continue;
+    }
     if (isWord('style')) {
-      next(); const s = next();
+      next();
+      const s = next();
       if (s.t !== 'word' || !(STYLES as readonly string[]).includes(s.v)) fail(`style is one of ${STYLES.join(', ')}`, s);
       style = s.v as Style;
     } else if (isWord('when') || isWord('otherwise')) {
@@ -143,16 +216,24 @@ export function parseScript(src: string): Strategy {
 const valText = (v: Val) => ('num' in v ? String(v.num) : v.var);
 function exprText(e: Expr, parent: 'and' | 'or' | 'not' | null = null): string {
   switch (e.op) {
-    case 'true': return 'always';
-    case 'focused': case 'foe_guarding': return e.op;
-    case 'chance': return `chance ${e.p}`;
-    case 'ready': return `ready ${e.move}`;
-    case 'not': return `not ${exprText(e.a, 'not')}`;
-    case 'and': case 'or': {
+    case 'true':
+      return 'always';
+    case 'focused':
+    case 'foe_guarding':
+      return e.op;
+    case 'chance':
+      return `chance ${e.p}`;
+    case 'ready':
+      return `ready ${e.move}`;
+    case 'not':
+      return `not ${exprText(e.a, 'not')}`;
+    case 'and':
+    case 'or': {
       const s = `${exprText(e.a, e.op)} ${e.op} ${exprText(e.b, e.op)}`;
       return parent && parent !== e.op ? `(${s})` : s;
     }
-    default: return `${valText(e.a)} ${e.op} ${valText(e.b)}`;
+    default:
+      return `${valText(e.a)} ${e.op} ${valText(e.b)}`;
   }
 }
 
@@ -160,7 +241,7 @@ function exprText(e: Expr, parent: 'and' | 'or' | 'not' | null = null): string {
 export function formatStrategy(s: Strategy): string {
   const lines = [`style ${s.style}`];
   for (const r of s.rules) lines.push(r.when.op === 'true' ? `otherwise: ${r.do}` : `when ${exprText(r.when)}: ${r.do}`);
-  return lines.join('\n') + '\n';
+  return `${lines.join('\n')}\n`;
 }
 
 /** The script equivalent of coaching tactics, as a starting point for editing. */

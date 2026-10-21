@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { genome, EARS, EYES, MOUTHS, PATTERNS, SHAPES, TAILS, RAMPS, INK } from '../../src/shared/genome';
 import { compose, eggCols, ITEMS, SLOTS } from '../../src/shared/compose';
+import { EARS, EYES, genome, INK, MOUTHS, PATTERNS, RAMPS, SHAPES, TAILS } from '../../src/shared/genome';
 import { hatchSeed, hatchTimeIso, seedToInt, sha256Hex } from '../../src/shared/rng';
 
-const seeds = async (n: number) => Promise.all(Array.from({ length: n }, (_, i) => sha256Hex('test-seed-' + i)));
+const seeds = async (n: number) => Promise.all(Array.from({ length: n }, (_, i) => sha256Hex(`test-seed-${i}`)));
 
 describe('genome', () => {
   test('is deterministic for a seed', async () => {
@@ -14,9 +14,14 @@ describe('genome', () => {
   test('only uses known parts and curated palette pairs', async () => {
     for (const s of await seeds(300)) {
       const g = genome(s);
-      expect(SHAPES).toContain(g.shape); expect(EARS).toContain(g.ears); expect(TAILS).toContain(g.tail);
-      expect(EYES).toContain(g.eyes); expect(MOUTHS).toContain(g.mouth); expect(PATTERNS).toContain(g.pattern);
-      expect(RAMPS[g.pal[0]]).toBeDefined(); expect(RAMPS[g.pal[1]]).toBeDefined();
+      expect(SHAPES).toContain(g.shape);
+      expect(EARS).toContain(g.ears);
+      expect(TAILS).toContain(g.tail);
+      expect(EYES).toContain(g.eyes);
+      expect(MOUTHS).toContain(g.mouth);
+      expect(PATTERNS).toContain(g.pattern);
+      expect(RAMPS[g.pal[0]]).toBeDefined();
+      expect(RAMPS[g.pal[1]]).toBeDefined();
       if (!g.shiny) expect(g.pal[0]).not.toBe('gold');
     }
   });
@@ -24,7 +29,10 @@ describe('genome', () => {
   test('applies the pairing rules', async () => {
     for (const s of await seeds(600)) {
       const g = genome(s);
-      if (g.eyes === 'cyclops') { expect(['mask', 'freckles']).not.toContain(g.pattern); expect(g.mouth).not.toBe('cat'); }
+      if (g.eyes === 'cyclops') {
+        expect(['mask', 'freckles']).not.toContain(g.pattern);
+        expect(g.mouth).not.toBe('cat');
+      }
       if (g.shape === 'drop') expect(['bunny', 'round']).not.toContain(g.ears);
       if (g.eyes === 'sleepy') expect(g.mouth).not.toBe('open');
     }
@@ -33,7 +41,8 @@ describe('genome', () => {
   test('shiny is rare (about 1 in 16)', async () => {
     const all = await seeds(2000);
     const shiny = all.filter((s) => genome(s).shiny).length / all.length;
-    expect(shiny).toBeGreaterThan(0.03); expect(shiny).toBeLessThan(0.1);
+    expect(shiny).toBeGreaterThan(0.03);
+    expect(shiny).toBeLessThan(0.1);
   });
 });
 
@@ -46,28 +55,42 @@ describe('compose', () => {
         const stalk = RAMPS[g.pal[1]][0];
         expect(cols.length).toBe(32 * 32);
         // Every filled pixel next to an empty one must be ink: the outline is the last pass.
-        for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
-          const c = cols[y * 32 + x]; if (!c) continue;
-          const edge = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => { const xx = x + dx, yy = y + dy; return xx >= 0 && yy >= 0 && xx < 32 && yy < 32 && !cols[yy * 32 + xx]; });
-          if (edge) expect([INK, stalk]).toContain(c);
-        }
+        for (let y = 0; y < 32; y++)
+          for (let x = 0; x < 32; x++) {
+            const c = cols[y * 32 + x];
+            if (!c) continue;
+            const edge = [
+              [1, 0],
+              [-1, 0],
+              [0, 1],
+              [0, -1],
+            ].some(([dx, dy]) => {
+              const xx = x + dx,
+                yy = y + dy;
+              return xx >= 0 && yy >= 0 && xx < 32 && yy < 32 && !cols[yy * 32 + xx];
+            });
+            if (edge) expect([INK, stalk]).toContain(c);
+          }
       }
     }
   });
 
   test('is pixel-identical for the same seed, pose and items', async () => {
     const [s] = await seeds(1);
-    const a: any = genome(s), b: any = genome(s);
+    const a = genome(s),
+      b = genome(s);
     a.items = b.items = { head: 'crown', face: 'shades', neck: 'scarf', held: 'duck' };
     expect(compose(a, { stage: 2, sq: 1 }).cols).toEqual(compose(b, { stage: 2, sq: 1 }).cols);
   });
 
   test('every item renders on every body without throwing', async () => {
     for (const s of await seeds(30)) {
-      for (const [slot] of SLOTS) for (const id of Object.keys(ITEMS).filter((k) => (ITEMS as any)[k].slot === slot)) {
-        const g: any = genome(s); g.items = { head: null, face: null, neck: null, held: null, [slot]: id };
-        expect(compose(g, { stage: 1 }).cols.some((c) => c)).toBe(true);
-      }
+      for (const [slot] of SLOTS)
+        for (const id of Object.keys(ITEMS).filter((k) => ITEMS[k].slot === slot)) {
+          const g = genome(s);
+          g.items = { head: null, face: null, neck: null, held: null, [slot]: id };
+          expect(compose(g, { stage: 1 }).cols.some((c) => c)).toBe(true);
+        }
     }
   });
 

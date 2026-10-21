@@ -39,10 +39,18 @@ export async function encodePng(width: number, height: number, rgba: Uint8Array)
   const stride = width * 4;
   const raw = new Uint8Array((stride + 1) * height);
   for (let y = 0; y < height; y++) raw.set(rgba.subarray(y * stride, (y + 1) * stride), y * (stride + 1) + 1);
-  const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', await deflate(raw)), chunk('IEND', new Uint8Array(0))];
+  const parts = [
+    new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', await deflate(raw)),
+    chunk('IEND', new Uint8Array(0)),
+  ];
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
   return out;
 }
 
@@ -75,12 +83,21 @@ export function paintSprite(cols: readonly (string | null)[], size: number, scal
 
 /** Shift a 32×32 sprite so its visible pixels sit in the middle of the frame. */
 export function centreSprite(cols: readonly (string | null)[]): (string | null)[] {
-  let x0 = 32, y0 = 32, x1 = -1, y1 = -1;
+  let x0 = 32,
+    y0 = 32,
+    x1 = -1,
+    y1 = -1;
   for (let y = 0; y < 32; y++)
     for (let x = 0; x < 32; x++)
-      if (cols[y * 32 + x]) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+      if (cols[y * 32 + x]) {
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y);
+        y1 = Math.max(y1, y);
+      }
   if (x1 < 0) return [...cols];
-  const dx = Math.floor((32 - (x1 - x0 + 1)) / 2) - x0, dy = Math.floor((32 - (y1 - y0 + 1)) / 2) - y0;
+  const dx = Math.floor((32 - (x1 - x0 + 1)) / 2) - x0,
+    dy = Math.floor((32 - (y1 - y0 + 1)) / 2) - y0;
   const out: (string | null)[] = new Array(32 * 32).fill(null);
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out[(y + dy) * 32 + x + dx] = cols[y * 32 + x];
   return out;

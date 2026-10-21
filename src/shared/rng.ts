@@ -2,7 +2,8 @@
 // Ported from the approved visual concept (cyrb-style hash + mulberry32).
 
 export function hashStr(str: string): number {
-  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  let h1 = 0xdeadbeef,
+    h2 = 0x41c6ce57;
   for (let i = 0; i < str.length; i++) {
     const c = str.charCodeAt(i);
     h1 = Math.imul(h1 ^ c, 2654435761);
@@ -17,7 +18,7 @@ export type Rng = () => number;
 
 export function mulberry(a: number): Rng {
   a = a >>> 0;
-  return function () {
+  return () => {
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
