@@ -2,8 +2,9 @@
 
 import { type BattleResult, fighter, HELD_EFFECTS, MOVES, type Snapshot, strongAgainst, type Tactics, TYPE_EDGE } from '../shared/battle';
 import { ITEMS, SLOTS } from '../shared/compose';
+import { FIRST_DAY_STEPS, type FirstDayStep, type FirstDayView } from '../shared/firstday';
 import { describe, type Genome, genome, RARITY, RCOL, STAGE_NAMES } from '../shared/genome';
-import { advance, type PetState, STAGE_XP } from '../shared/state';
+import { advance, HUNGRY_BELOW, type PetState, STAGE_XP, TIRED_BELOW } from '../shared/state';
 import { battleVerdict } from '../shared/verdict';
 import { itemIcon, paintStatic, RM, spr } from './engine';
 import { makeMeadow } from './meadow';
@@ -40,6 +41,7 @@ interface PlayerView {
   creature: CreatureView | null;
   inventory: { item: string }[];
   unseenDefences: number;
+  firstDay?: FirstDayView | null;
 }
 interface Me extends PlayerView {
   session: Session;
@@ -180,6 +182,7 @@ function petGenome(c: CreatureView): Genome {
 // ---------- routing ----------
 const VIEWS = ['login', 'hatch', 'home', 'coach', 'battle', 'ranks', 'api'];
 function show(v: string) {
+  const from = S.view;
   // Picking a tab from the keyboard moves focus to the new screen, not back to the top of the page.
   const fromTabs = S.view !== v && !!document.activeElement?.closest('#tabs');
   S.view = v;
@@ -191,6 +194,12 @@ function show(v: string) {
     a.setAttribute('aria-current', a.dataset.tab === v ? 'page' : 'false');
   if (v === 'login') renderSignIn();
   if (v === 'home') renderHome();
+  // Coach and other clients can tick first-day steps without returning the player view.
+  if (v === 'home' && from && from !== 'home' && S.me?.firstDay && !S.me.firstDay.complete)
+    refresh().then(
+      () => S.view === 'home' && renderHome(),
+      () => {},
+    );
   if (v === 'coach') renderCoach();
   if (v === 'battle') renderBattleLog();
   if (v === 'ranks') renderRanks();
@@ -332,6 +341,9 @@ const STAT_DEF: ['fullness' | 'mood' | 'energy', string, string][] = [
   ['mood', 'Mood', '#ff86bd'],
   ['energy', 'Energy', '#86bdff'],
 ];
+/** A need bar below this turns coral. */
+const LOW_NEED = 25;
+const CORAL = '#ff6f62';
 function renderHome() {
   const c = S.me?.creature;
   if (!c) return;
@@ -344,20 +356,112 @@ function renderHome() {
   $('petStars').style.color = RCOL[g.rarity];
   $('petStars').title = RARITY[g.rarity];
   $('petMeta').textContent = `Lv ${c.level} ${STAGE_NAMES[c.stage]} · ${g.type} type · ${c.mood}`;
+  renderNeedChips(c.state, napping);
   $('napBtn').textContent = napping ? 'Wake' : 'Nap';
   const xpNext = c.nextStageXp,
     xp = Math.floor(c.state.xp),
     prev = STAGE_XP[c.stage];
   const growth = xpNext ? Math.max(0, Math.min(100, ((xp - prev) / (xpNext - prev)) * 100)) : 100;
   $('stats').innerHTML =
-    STAT_DEF.map(
-      ([k, label, col]) =>
-        `<div class="stat"><span>${label}</span><div class="bar"><i style="width:${Math.round(c.state[k])}%;background-color:${col}"></i></div><span class="v">${Math.round(c.state[k])}</span></div>`,
-    ).join('') +
+    STAT_DEF.map(([k, label, col]) => {
+      const v = Math.round(c.state[k]),
+        low = c.state[k] < LOW_NEED;
+      return `<div class="stat${low ? ' low' : ''}"><span>${label}</span><div class="bar"><i style="width:${v}%;background-color:${low ? CORAL : col}"></i></div><span class="v">${v}${low ? '<span class="visually-hidden"> (low)</span>' : ''}</span></div>`;
+    }).join('') +
     `<div class="stat"><span>Growth</span><div class="bar"><i style="width:${growth}%;background-color:#6fdc9c"></i></div><span class="v">${xp}</span></div>` +
     `<p class="statnote">${xpNext ? `${Math.max(0, xpNext - xp)} XP until it evolves into a ${STAGE_NAMES[c.stage + 1]}.` : 'Fully evolved. A Prime.'} Needs change over time, even while you're away.</p>`;
   renderWardrobe();
+  renderFirstDay();
   if (c.evolving) startEvolution();
+}
+
+/** "Hungry" and "Tired" chips by the name, at the levels where mood starts to suffer. Re-rendered only when they change, so they pop in once. */
+function renderNeedChips(s: PetState, napping: boolean) {
+  const chips = [s.fullness < HUNGRY_BELOW ? 'Hungry' : '', !napping && s.energy < TIRED_BELOW ? 'Tired' : ''].filter(Boolean);
+  const el = $('petChips');
+  const key = chips.join(',');
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML = chips.map((t) => `<span class="chip">${t}</span>`).join('');
+}
+
+// ---------- first day ----------
+const FIRST_DAY_COPY: Record<FirstDayStep, { label: string; next: string }> = {
+  feed: { label: 'Feed it', next: 'Tap Feed. A fed, happy Forkling keeps growing while you’re away.' },
+  dress: { label: 'Put something on', next: 'Pick something from the wardrobe. A held item gives a small battle edge.' },
+  plan: { label: 'Set a plan', next: 'Open Coach and save a plan. Your Forkling fights that way, even while you’re away.' },
+  win: { label: 'Win a battle', next: 'Find a battle. If you lose, try a different plan in Coach.' },
+};
+/** Steps ticked as of the last render, so a newly ticked one gets its burst. Null before the first render. */
+let fdShown: Set<FirstDayStep> | null = null;
+
+function firstDayGo(step: FirstDayStep) {
+  if (step === 'feed') document.querySelector<HTMLButtonElement>('[data-care=feed]')?.click();
+  if (step === 'dress') {
+    $('wardrobe').scrollIntoView({ behavior: RM ? 'auto' : 'smooth', block: 'center' });
+    $('wardrobe')
+      .querySelector<HTMLButtonElement>('.item:not(.locked)[aria-pressed=false]:not(:first-child)')
+      ?.focus({ preventScroll: true });
+  }
+  if (step === 'plan') location.hash = '#coach';
+  if (step === 'win') location.hash = '#battle';
+}
+
+async function closeFirstDay() {
+  try {
+    const r = await api<PlayerView>('/api/first-day/close', { body: {} });
+    S.me = { ...S.me!, ...r };
+  } catch {
+    S.me = { ...S.me!, firstDay: null };
+  }
+  renderHome();
+}
+
+function renderFirstDay() {
+  const fd = S.me?.firstDay,
+    el = $('firstDay');
+  el.hidden = !fd;
+  // Rebuild only when something changed, so the minute-by-minute refresh doesn't steal focus.
+  const key = fd ? JSON.stringify(fd) : '';
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  if (!fd) return;
+  const ticked = new Set(FIRST_DAY_STEPS.filter((s) => fd.steps[s]));
+  const fresh = (s: FirstDayStep) => fdShown !== null && ticked.has(s) && !fdShown.has(s);
+  const name = esc(S.g!.name);
+  if (fd.complete) {
+    const it = fd.reward ? ITEMS[fd.reward] : undefined;
+    el.innerHTML = `<div class="fd-head"><h3 id="fdTitle">First day done!</h3></div>
+      <div class="fd-reward${fdShown && fdShown.size < FIRST_DAY_STEPS.length ? ' just' : ''}">${it ? '<span class="fd-gift"><canvas aria-hidden="true"></canvas></span>' : ''}
+      <p>${it ? `${name} found a <b>${esc(it.name)}</b> for you. It’s in the wardrobe.` : `${name} had a great first day.`}</p></div>
+      <div class="row">${it ? '<button class="btn" type="button" data-fd-wear>Wear it</button>' : ''}<button class="btn ghost" type="button" data-fd-close>${it ? 'Later' : 'Close'}</button></div>`;
+    if (it) paintStatic(el.querySelector('canvas')!, itemIcon(fd.reward!), 44);
+    el.querySelector('[data-fd-wear]')?.addEventListener('click', async () => {
+      try {
+        const r = await api<PlayerView>('/api/equip', { body: { slot: it!.slot, item: fd.reward } });
+        S.me = { ...S.me!, ...r };
+        S.g = petGenome(S.me.creature!);
+        homeStage?.react('equip');
+      } catch (e) {
+        homeStage?.say(errMsg(e), false);
+      }
+      await closeFirstDay();
+    });
+  } else {
+    const next = FIRST_DAY_STEPS.find((s) => !ticked.has(s))!;
+    el.innerHTML = `<div class="fd-head"><h3 id="fdTitle">First day</h3><span class="fd-count">${ticked.size} of ${FIRST_DAY_STEPS.length}</span>
+      <button class="fd-close" type="button" data-fd-close aria-label="Hide the first-day list">×</button></div>
+      <ol class="fd-steps">${FIRST_DAY_STEPS.map((s) =>
+        ticked.has(s)
+          ? `<li class="done${fresh(s) ? ' just' : ''}"><span class="fd-box" aria-hidden="true"></span><span><span class="visually-hidden">Done: </span>${FIRST_DAY_COPY[s].label}</span></li>`
+          : `<li><button type="button" data-fd-go="${s}"><span class="fd-box" aria-hidden="true"></span>${FIRST_DAY_COPY[s].label}</button></li>`,
+      ).join('')}</ol>
+      <p class="fd-next">${FIRST_DAY_COPY[next].next}</p>`;
+    for (const b of el.querySelectorAll<HTMLElement>('[data-fd-go]'))
+      b.addEventListener('click', () => firstDayGo(b.dataset.fdGo as FirstDayStep));
+  }
+  el.querySelector('[data-fd-close]')?.addEventListener('click', closeFirstDay);
+  fdShown = ticked;
 }
 
 function renderWardrobe() {
@@ -404,6 +508,7 @@ function renderWardrobe() {
           homeStage!.react('equip');
         } catch (e) {
           $('careMsg').textContent = errMsg(e);
+          homeStage?.say(errMsg(e), false);
         }
       });
       opts.appendChild(b);
@@ -417,7 +522,9 @@ function initCare() {
     b.addEventListener('click', async () => {
       const action = b.dataset.care!;
       const r = await api<CareResponse>('/api/care', { body: { action }, soft: true });
-      $('careMsg').textContent = (r.message || r.error || '') + (r.xpGain ? `  +${r.xpGain} XP` : '');
+      const said = (r.message || r.error || '') + (r.xpGain ? `  +${r.xpGain}\u00a0XP` : '');
+      $('careMsg').textContent = said;
+      homeStage?.say(said, !!r.ok);
       if (r.creature) {
         S.me = { ...S.me!, ...r };
         S.g = petGenome(S.me.creature!);

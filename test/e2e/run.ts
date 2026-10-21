@@ -211,6 +211,13 @@ await step('wardrobe equips a starter item', async () => {
   await shot(p, 'desktop-home');
 });
 
+await step('first-day list ticks off dressing up and feeding', async () => {
+  await p.locator('#firstDay li.done').first().waitFor();
+  await p.click('#firstDay [data-fd-go=feed]');
+  await p.waitForFunction(() => document.querySelectorAll('#firstDay li.done').length === 2);
+  expect(((await p.textContent('#firstDay')) ?? '').includes('2 of 4'), 'list shows 2 of 4');
+});
+
 await step('coaching tactics save', async () => {
   await p.goto(`${BASE}/#coach`);
   await p.locator('#coachForm').waitFor({ state: 'visible' });

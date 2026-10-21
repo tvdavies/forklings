@@ -447,6 +447,10 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
       const r = await me.setScript(body.script);
       return r.ok ? json(r) : json({ error: r.error, line: r.line, col: r.col }, 409);
     }
+    case p === '/api/first-day/close' && m === 'POST': {
+      const r = await me.closeFirstDay();
+      return r.ok ? json({ ok: true, ...(await me.view()) }) : err(409, r.error);
+    }
     case p === '/api/evolve' && m === 'POST':
       return json({ ...(await me.ackEvolution()), ...(await me.view()) });
     case p === '/api/battle' && m === 'POST':
