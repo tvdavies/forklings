@@ -5,6 +5,8 @@ import { cookie, getCookie, randomToken, Session, sha256b64, signSession, verify
 import { sha256Hex } from '../shared/rng';
 import { makeBot } from '../shared/bots';
 import type { Snapshot } from '../shared/battle';
+import { NPC_ROSTER, npcPid } from '../shared/npcs';
+import type { CareAction } from '../shared/state';
 export { PlayerDO } from './player';
 export { BattleDO } from './battle';
 
@@ -16,8 +18,11 @@ const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 const DEMO_SIGNUPS_PER_IP_PER_DAY = 5;
 const PAIR_COOLDOWN_MS = 6 * 3600 * 1000;
 export const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
-// SQL for "may play ranked": a verified GitHub player whose account is at least 30 days old.
-const RANKED_SQL = `(verified = 1 AND gh_created_at IS NOT NULL AND gh_created_at <= ?)`;
+// SQL for "may play ranked": a verified GitHub player whose account is at least 30 days
+// old, or a house NPC while NPCs are on. Takes one parameter: the account-age cutoff.
+const rankedSql = (env: Env) => `(${npcsOn(env) ? 'npc = 1 OR ' : ''}(verified = 1 AND gh_created_at IS NOT NULL AND gh_created_at <= ?))`;
+const npcsOn = (env: Env) => env.NPCS !== 'off';
+const visibleSql = (env: Env) => (npcsOn(env) ? '1 = 1' : 'npc = 0');
 
 function origin(req: Request, env: Env) { return env.PUBLIC_ORIGIN || new URL(req.url).origin; }
 const isSecure = (req: Request) => new URL(req.url).protocol === 'https:';
@@ -51,7 +56,7 @@ async function ensurePlayerRow(env: Env, s: { pid: string; h: string; v: boolean
 }
 
 async function isRanked(env: Env, pid: string, now: number): Promise<boolean> {
-  return !!(await env.DB.prepare(`SELECT 1 AS ok FROM players WHERE pid = ? AND ${RANKED_SQL}`).bind(pid, now - RANKED_MIN_ACCOUNT_AGE_MS).first('ok'));
+  return !!(await env.DB.prepare(`SELECT 1 AS ok FROM players WHERE pid = ? AND ${rankedSql(env)}`).bind(pid, now - RANKED_MIN_ACCOUNT_AGE_MS).first('ok'));
 }
 
 async function ipHash(req: Request, env: Env) {
@@ -123,31 +128,33 @@ async function githubCallback(req: Request, env: Env) {
 }
 
 // ---------- battle ----------
-async function startBattle(env: Env, a: Auth) {
-  const me = await player(env, a.s);
+/**
+ * One battle path for everyone, players and house NPCs alike.
+ * Matchmaking: ranked players (and NPCs) meet other ranked players and NPCs close in
+ * level, not themselves, and not anyone they fought in the last 6 hours either way.
+ * Unranked players (demo logins, GitHub accounts under 30 days) meet NPCs and house
+ * bots, and their battles never move a rating. With nobody suitable, a house bot steps in.
+ */
+async function runBattle(env: Env, who: { pid: string; h: string; v: boolean }): Promise<{ ok: true; out: any } | { ok: false; error: string }> {
+  const me = await player(env, who);
   const prep = await me.prepareBattle();
-  if (!prep.ok) return err(409, prep.error!);
+  if (!prep.ok) return { ok: false, error: prep.error! };
   const snapA = prep.snapshot!;
   const now = Date.now();
-  const ranked = await isRanked(env, a.s.pid, now);
-  const myRow = await env.DB.prepare('SELECT rating FROM players WHERE pid = ?').bind(a.s.pid).first<any>();
-  // Matchmaking (ranked players only): other ranked players with a hatched Forkling,
-  // close in level, not you, and not fought by you in the last 6 hours either way.
-  // Unranked players (demo logins, GitHub accounts under 30 days) fight house bots.
-  let rows: any[] = [];
-  if (ranked) {
-    const pool = await env.DB.prepare(`
-      SELECT pid, snapshot, rating FROM players
-      WHERE has_creature = 1 AND pid != ?1 AND snapshot IS NOT NULL AND ${RANKED_SQL.replace('?', '?2')}
-        AND ABS(level - ?3) <= 3 AND updated_at > ?4
-        AND pid NOT IN (SELECT defender FROM battles WHERE challenger = ?1 AND at > ?5)
-        AND pid NOT IN (SELECT challenger FROM battles WHERE defender = ?1 AND at > ?5)
-      ORDER BY ABS(rating - ?6) LIMIT 6`)
-      .bind(a.s.pid, now - RANKED_MIN_ACCOUNT_AGE_MS, snapA.level, now - 14 * 86400e3, now - PAIR_COOLDOWN_MS, myRow?.rating ?? 1000).all<any>();
-    rows = pool.results || [];
-  }
+  const ranked = await isRanked(env, who.pid, now);
+  const myRow = await env.DB.prepare('SELECT rating FROM players WHERE pid = ?').bind(who.pid).first<any>();
+  const eligible = ranked ? rankedSql(env).replace('?', '?2') : npcsOn(env) ? '(npc = 1 AND ?2 = ?2)' : '(0 AND ?2 = ?2)';
+  const pool = await env.DB.prepare(`
+    SELECT pid, snapshot, rating FROM players
+    WHERE has_creature = 1 AND pid != ?1 AND snapshot IS NOT NULL AND ${eligible}
+      AND ABS(level - ?3) <= 3 AND updated_at > ?4
+      AND pid NOT IN (SELECT defender FROM battles WHERE challenger = ?1 AND at > ?5)
+      AND pid NOT IN (SELECT challenger FROM battles WHERE defender = ?1 AND at > ?5)
+    ORDER BY ABS(rating - ?6) LIMIT 6`)
+    .bind(who.pid, now - RANKED_MIN_ACCOUNT_AGE_MS, snapA.level, now - 14 * 86400e3, now - PAIR_COOLDOWN_MS, myRow?.rating ?? 1000).all<any>();
+  const rows = pool.results || [];
   const id = crypto.randomUUID();
-  const seed = await sha256Hex(`battle|${id}|${a.s.pid}|${now}`);
+  const seed = await sha256Hex(`battle|${id}|${who.pid}|${now}`);
   let snapB: Snapshot;
   if (rows.length && parseInt(seed.slice(8, 10), 16) < 200) {
     const pick = rows[parseInt(seed.slice(10, 14), 16) % rows.length];
@@ -156,8 +163,52 @@ async function startBattle(env: Env, a: Auth) {
     snapB = makeBot(await sha256Hex('bot|' + seed), snapA.xp ?? 0);
   }
   const battle: any = env.BATTLE.get(env.BATTLE.idFromName(id));
-  const out = await battle.run(id, snapA, snapB, seed, ranked);
-  return json(out);
+  return { ok: true, out: await battle.run(id, snapA, snapB, seed, ranked) };
+}
+
+async function startBattle(env: Env, a: Auth) {
+  const r = await runBattle(env, { pid: a.s.pid, h: a.s.h, v: a.s.v });
+  return r.ok ? json(r.out) : err(409, r.error);
+}
+
+// ---------- house NPCs ----------
+const NPC_HATCH_EPOCH = Date.UTC(2026, 9, 1, 9, 0, 0);
+const NPC_BATTLES_PER_TICK = 3;
+
+/** Create any roster NPC that doesn't exist yet. Idempotent. */
+async function seedNpcs(env: Env, now: number) {
+  const have = new Set(((await env.DB.prepare('SELECT pid FROM players WHERE npc = 1 AND has_creature = 1').all<any>()).results || []).map((r: any) => r.pid));
+  for (const [i, n] of NPC_ROSTER.entries()) {
+    const pid = npcPid(n.handle);
+    if (have.has(pid)) continue;
+    await env.DB.prepare('INSERT INTO players (pid, handle, verified, created_at, updated_at, npc, persona, rating) VALUES (?, ?, 0, ?, ?, 1, ?, ?) ON CONFLICT(pid) DO NOTHING')
+      .bind(pid, n.handle, now, now, n.persona, n.rating).run();
+    const stub = await player(env, { pid, h: n.handle, v: false });
+    await stub.setupNpc(env.HATCH_SALT, NPC_HATCH_EPOCH + i * 3637 * 1000, n.xp, n.items, n.tactics, now);
+  }
+}
+
+/** Every tick: NPCs look after their Forklings like an attentive player would, and a few pick a fight. */
+async function npcTick(env: Env, now: number) {
+  if (!npcsOn(env)) return;
+  await seedNpcs(env, now);
+  const npcs = ((await env.DB.prepare('SELECT pid, handle FROM players WHERE npc = 1 AND has_creature = 1').all<any>()).results || []) as { pid: string; handle: string }[];
+  for (const n of npcs) {
+    const stub = await player(env, { pid: n.pid, h: n.handle, v: false });
+    const v = await stub.view(now);
+    const s = v.creature?.state; if (!s) continue;
+    if (v.creature.evolving) await stub.ackEvolution(now);
+    const todo: CareAction[] = [];
+    if (s.fullness < 55) todo.push('feed');
+    if (s.mood < 55) todo.push('pat');
+    if (s.energy < 25) todo.push('nap'); else if (s.mood < 70 && s.energy > 60) todo.push('play');
+    for (const a of todo) await stub.care(a, now);
+  }
+  const order = npcs.map((n) => ({ n, k: Math.random() })).sort((x, y) => x.k - y.k).slice(0, NPC_BATTLES_PER_TICK);
+  for (const { n } of order) {
+    const r = await runBattle(env, { pid: n.pid, h: n.handle, v: false });
+    if (!r.ok) console.log('npc battle skipped', n.handle, r.error);
+  }
 }
 
 // ---------- tokens ----------
@@ -177,9 +228,10 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === '/api/config') return json({ github: !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET), demo: env.DEMO_LOGIN !== 'off' });
   if (p === '/api/leaderboard') {
     const cutoff = Date.now() - RANKED_MIN_ACCOUNT_AGE_MS;
-    const cols = 'handle, verified, name, seed, level, stage, rating, wins, losses, draws, xp';
-    const ranked = await env.DB.prepare(`SELECT ${cols} FROM players WHERE has_creature = 1 AND ${RANKED_SQL} ORDER BY rating DESC, wins DESC, xp DESC LIMIT 50`).bind(cutoff).all();
-    const unranked = await env.DB.prepare(`SELECT ${cols} FROM players WHERE has_creature = 1 AND NOT ${RANKED_SQL} ORDER BY wins DESC, xp DESC LIMIT 50`).bind(cutoff).all();
+    const cols = 'handle, verified, npc, persona, name, seed, level, stage, rating, wins, losses, draws, xp';
+    const where = `has_creature = 1 AND ${visibleSql(env)}`;
+    const ranked = await env.DB.prepare(`SELECT ${cols} FROM players WHERE ${where} AND ${rankedSql(env)} ORDER BY rating DESC, wins DESC, xp DESC LIMIT 50`).bind(cutoff).all();
+    const unranked = await env.DB.prepare(`SELECT ${cols} FROM players WHERE ${where} AND NOT ${rankedSql(env)} ORDER BY wins DESC, xp DESC LIMIT 50`).bind(cutoff).all();
     return json({ players: ranked.results, unranked: unranked.results });
   }
   const a = await authenticate(req, env);
@@ -249,5 +301,8 @@ export default {
       console.error('request failed', url.pathname, e?.stack || e);
       return err(500, 'Something went wrong. Try again.');
     }
+  },
+  async scheduled(ctl: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(npcTick(env, ctl.scheduledTime));
   },
 } satisfies ExportedHandler<Env>;

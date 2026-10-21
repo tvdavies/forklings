@@ -120,6 +120,23 @@ export class PlayerDO extends DurableObject<Env> {
     return { ok: true, tactics: c.tactics };
   }
 
+  /**
+   * House NPC setup, run once by the seeding cron. Hatches through the normal path at a
+   * fixed hatch time (so each NPC's Forkling is reproducible), then gives it its starting
+   * XP, wardrobe and tactics. Battles and care afterwards use the normal methods.
+   */
+  async setupNpc(salt: string, hatchAt: number, xp: number, items: Record<string, string>, tactics: unknown, now = Date.now()) {
+    if (!this.creature()) { const r = await this.hatch(salt, hatchAt); if (!r.ok) return r; }
+    const c = this.creature()!;
+    c.state = { ...newState(now), xp, stage: stageForXp(xp) };
+    for (const it of Object.values(items)) this.sql.exec('INSERT OR IGNORE INTO inventory (item, got_at, source) VALUES (?, ?, ?)', it, now, 'npc');
+    c.items = { head: null, face: null, neck: null, held: null, ...items };
+    c.tactics = sanitiseTactics(tactics);
+    this.set('creature', c);
+    await this.publish(now);
+    return { ok: true };
+  }
+
   async ackEvolution(now = Date.now()) {
     const c = this.advanced(now); if (!c) return { ok: false };
     const s = stageForXp(c.state.xp);

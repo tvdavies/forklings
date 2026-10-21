@@ -54,6 +54,7 @@ input.handle{width:14ch} input.handle.wide{width:22ch}
 input.handle::placeholder{color:#6f5f8c}
 .badge{display:inline-block;font:600 12px/1 var(--f-pixel);padding:4px 6px 5px;background:var(--dusk2);color:var(--mint);--bc:var(--ink);box-shadow:var(--ring);margin:4px;text-transform:uppercase;letter-spacing:.04em}
 .badge.warn{color:var(--butter)}
+.badge.npc{color:var(--haze)}
 .err{color:var(--coral);min-height:1.4em;margin:6px 0 0;font-size:15px}
 .toastline{min-height:1.5em;color:var(--butter);font-family:var(--f-pixel);font-size:17px;margin:6px 4px}
 

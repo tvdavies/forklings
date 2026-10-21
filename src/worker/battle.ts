@@ -29,9 +29,12 @@ export class BattleDO extends DurableObject<Env> {
     }
     const col = (w: 0 | 1 | null, side: 0 | 1) => (w === null ? 'draws' : w === side ? 'wins' : 'losses');
     const DB = this.env.DB;
+    // House NPCs are tagged so balancing queries can leave them out: WHERE npc = 0.
+    const isNpc = (s: Snapshot) => (s.pid.startsWith('npc:') ? 1 : 0);
+    const npcBattle = isNpc(a) || isNpc(b) ? 1 : 0;
     const stmts = [
-      DB.prepare('INSERT INTO battles (id, at, challenger, defender, defender_bot, winner, seed, ranked, rounds, sim_version, snap_a, snap_b, turns) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .bind(id, now, a.pid, b.pid, b.bot ? 1 : 0, result.winner, seed, ranked ? 1 : 0, result.rounds, result.version,
+      DB.prepare('INSERT INTO battles (id, at, challenger, defender, defender_bot, winner, seed, ranked, npc, rounds, sim_version, snap_a, snap_b, turns) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(id, now, a.pid, b.pid, b.bot ? 1 : 0, result.winner, seed, ranked ? 1 : 0, npcBattle, result.rounds, result.version,
           JSON.stringify({ ...a, strategy: strategyOf(a) }), JSON.stringify({ ...b, strategy: strategyOf(b) }), turnSummary(result)),
       DB.prepare(`UPDATE players SET ${ranked ? 'rating = ?, ' : ''}${col(result.winner, 0)} = ${col(result.winner, 0)} + 1 WHERE pid = ?`).bind(...(ranked ? [na, a.pid] : [a.pid])),
     ];
@@ -39,8 +42,8 @@ export class BattleDO extends DurableObject<Env> {
     const lastHp = result.events.length ? result.events[result.events.length - 1].hp : result.maxHp;
     for (const [side, s] of [[0, a], [1, b]] as const) {
       const f = fighter(s), st = strategyOf(s), t = s.tactics;
-      stmts.push(DB.prepare(`INSERT INTO battle_sides (battle_id, side, pid, bot, ranked, won, level, stage, type, head, face, neck, held, strategy_source, style, special, heal_at, aggression, max_hp, hp_left, at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id, side, s.pid, s.bot ? 1 : 0, ranked ? 1 : 0, result.winner === null ? null : result.winner === side ? 1 : 0,
+      stmts.push(DB.prepare(`INSERT INTO battle_sides (battle_id, side, pid, bot, npc, ranked, won, level, stage, type, head, face, neck, held, strategy_source, style, special, heal_at, aggression, max_hp, hp_left, at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id, side, s.pid, s.bot ? 1 : 0, isNpc(s), ranked ? 1 : 0, result.winner === null ? null : result.winner === side ? 1 : 0,
         s.level, s.stage, f.g.type, s.items?.head ?? null, s.items?.face ?? null, s.items?.neck ?? null, s.items?.held ?? null,
         st.source, st.style, st.source === 'tactics' ? t.special : null, st.source === 'tactics' ? t.healAt : null, st.source === 'tactics' ? t.aggression : null,
         result.maxHp[side], lastHp[side], now));

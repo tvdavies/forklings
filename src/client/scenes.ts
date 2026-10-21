@@ -1,19 +1,17 @@
-// @ts-nocheck
 // Animated scenes: hatch reveal, home room, battle replay and evolution.
 // Timing and staging follow the concept's five moments.
 import { Stage, Particles, spr, egg, idlePose, ease, clamp01, RM, chestClosed, chestOpen, heart, zzz, snack, shield, itemIcon } from './engine';
-import { RAMPS, INK, RARITY, RCOL, genome } from '../shared/genome';
-import { ITEMS } from '../shared/compose';
-import { simulate } from '../shared/battle';
+import { RAMPS, INK, RARITY, RCOL, genome, type Genome } from '../shared/genome';
+import { ITEMS, type Pose } from '../shared/compose';
+import { simulate, type BattleEvent, type BattleResult, type Snapshot } from '../shared/battle';
 
 /* ---------- hatch ---------- */
-export function makeHatch(canvas, opts) {
+export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatched?: (g: Genome) => void }) {
   const st = new Stage(canvas, 96, 72, '#2c2146'); st.floor = [58, '#4a3a6b'];
   const S = { g: opts.g, state: 'idle', t0: 0, parts: new Particles(), burst: false, flash: 0, carded: false, landed: false };
   const stars = Array.from({ length: 22 }, (_, i) => ({ x: (i * 41 + 7) % 96, y: (i * 17 + 3) % 38, p: (i * 0.37) % 5 }));
-  st.hatch = g => { S.g = g; S.state = 'hatching'; S.t0 = st.t; S.burst = false; S.carded = false; S.landed = false; S.parts.a = []; };
-  st.setG = g => { S.g = g; };
-  st.draw = (x, t, dt) => {
+  const hatch = (g: Genome) => { S.g = g; S.state = 'hatching'; S.t0 = st.t; S.burst = false; S.carded = false; S.landed = false; S.parts.a = []; };
+  st.draw = (_x, t, dt) => {
     const g = S.g; if (!g) return; const bR = RAMPS[g.pal[0]], aR = RAMPS[g.pal[1]];
     st.rect(0, 0, 96, 72, '#2c2146'); st.rect(0, 30, 96, 8, '#33274f'); st.rect(0, 38, 96, 8, '#3a2d58'); st.rect(0, 46, 96, 26, '#413361');
     for (const s of stars) { if (Math.floor(t * 1.5 + s.p) % 6) st.rect(s.x, s.y, 1, 1, s.p > 3 ? '#fff2dc' : '#8f7fb0'); }
@@ -35,7 +33,7 @@ export function makeHatch(canvas, opts) {
           for (let i = 0; i < (RM ? 10 : 40); i++) S.parts.add({ x: 46 + Math.random() * 4, y: 40, vx: (Math.random() - 0.5) * 110, vy: -50 - Math.random() * 70, g: 80, drag: 1.2, s: 1, c: [bR[1], bR[2], aR[1], aR[2], '#ffd166', '#fff2dc'][i % 6], life: 1.4 + Math.random() * 1.2, fade: 0.5 }); }
         const T2 = T - 2.95;
         if (T2 < 2.2) { const a = 1 - T2 / 2.2; st.glow(48, 44, 34, bR[3], 0.35 * a); st.rays(48, 44, 60, t * 0.6, '#fff2dc', 0.10 * a, 12); }
-        let y = 0, pose;
+        let y = 0, pose: Pose;
         const base = { stage: 0 };
         if (T2 < 0.3) { const p = T2 / 0.3; y = -14 * (1 - p * p); pose = { ...base, sq: -2 }; }
         else if (T2 < 0.38) { pose = { ...base, sq: 2 }; if (!S.landed) { S.landed = true; st.shake(1, 0.08); for (let i = 0; i < 8; i++) S.parts.add({ x: 40 + Math.random() * 16, y: 57, vx: (Math.random() - 0.5) * 40, vy: -10 - Math.random() * 15, g: 40, s: 1, c: '#4a3a6b', life: 0.5, fade: 0.3 }); } }
@@ -51,22 +49,26 @@ export function makeHatch(canvas, opts) {
     S.parts.step(dt); S.parts.draw(st);
     if (S.flash > 0) { st.fadeAll('#fff6e6', S.flash); S.flash -= dt / 0.35; }
   };
-  return st;
+  return Object.assign(st, { hatch });
 }
 
 /* ---------- home ---------- */
-export function makeHome(canvas) {
+interface HomeState {
+  g: Genome | null; stage: number; napping: boolean; mood: string;
+  x: number; dir: number; mode: 'idle' | 'walk'; timer: number; react: number; kind: string; parts: Particles; hop: number;
+}
+export function makeHome(canvas: HTMLCanvasElement) {
   const home = new Stage(canvas, 160, 90, '#3b2c55'); home.floor = [64, '#7a4a34'];
-  const H = { g: null, stage: 0, napping: false, mood: 'content', x: 70, dir: 1, mode: 'idle', timer: 1.5, react: -9, kind: '', parts: new Particles(), hop: 0 };
-  home.set = (g, stage, napping, mood) => { H.g = g; H.stage = stage; H.napping = napping; H.mood = mood; };
-  home.react = (kind) => {
+  const H: HomeState = { g: null, stage: 0, napping: false, mood: 'content', x: 70, dir: 1, mode: 'idle', timer: 1.5, react: -9, kind: '', parts: new Particles(), hop: 0 };
+  const set = (g: Genome, stage: number, napping: boolean, mood: string) => { H.g = g; H.stage = stage; H.napping = napping; H.mood = mood; };
+  const react = (kind: string) => {
     H.react = home.t; H.kind = kind; const cx = H.x + 16;
     if (kind === 'feed') { for (let i = 0; i < 3; i++) H.parts.add({ img: snack(), x: cx - 3 + (i - 1) * 6, y: 30 - i * 4, vx: 0, vy: 20, g: 60, life: 0.7 + i * 0.1, fade: 0.2 }); }
     if (kind === 'pat' || kind === 'feed') { for (let i = 0; i < 3; i++) H.parts.add({ img: heart(), x: cx - 10 + i * 8 + Math.random() * 3, y: 48 - i * 2, vx: (Math.random() - 0.5) * 6, vy: -14 - Math.random() * 6, life: 1.6, fade: 0.5 }); }
     if (kind === 'play' || kind === 'equip') { for (let i = 0; i < 16; i++) { const a = Math.random() * Math.PI * 2; H.parts.add({ x: cx + Math.cos(a) * 3, y: 66 + Math.sin(a) * 3, vx: Math.cos(a) * 34, vy: Math.sin(a) * 26 - 10, drag: 3, s: kind === 'equip' ? 2 : 1, c: i % 3 ? (kind === 'equip' ? '#eadcff' : '#ffd166') : '#ffffff', life: 0.5 + Math.random() * 0.3, fade: 0.3 }); } }
   };
   const codeCols = ['#6fdc9c', '#86bdff', '#ffd166', '#ff86bd', '#bf98ff']; const codeLines = Array.from({ length: 24 }, (_, i) => ({ w: 3 + ((i * 7) % 12), i0: (i * 3) % 5, c: codeCols[(i * 5) % 5] }));
-  home.draw = (x, t, dt) => {
+  home.draw = (_x, t, dt) => {
     const g = H.g, s = home; if (!g) return;
     s.rect(0, 0, 160, 64, '#3b2c55'); for (let yy = 4; yy < 60; yy += 8) for (let xx = (yy / 8 % 2) * 4; xx < 160; xx += 8) s.rect(xx, yy, 1, 1, '#45345f');
     s.rect(0, 62, 160, 2, '#2a1f3d'); for (let yy = 64; yy < 90; yy += 5) { s.rect(0, yy, 160, 5, yy % 10 ? '#7a4a34' : '#86523a'); s.rect(0, yy + 4, 160, 1, '#5a3328'); for (let xx = ((yy * 7) % 23); xx < 160; xx += 31) s.rect(xx, yy, 1, 4, '#5a3328'); }
@@ -91,7 +93,7 @@ export function makeHome(canvas) {
       if (H.mode === 'idle' && H.timer <= 0) { H.mode = 'walk'; H.dir = H.x < 50 ? 1 : H.x > 92 ? -1 : (Math.random() < 0.5 ? -1 : 1); H.timer = 1.2 + Math.random() * 1.6; }
       else if (H.mode === 'walk') { H.x += H.dir * (H.mood === 'sulking' || H.mood === 'hungry' ? 7 : 13) * dt; H.hop += dt; if (H.timer <= 0 || H.x < 30 || H.x > 98) { H.mode = 'idle'; H.timer = 1.6 + Math.random() * 2.4; H.x = Math.max(30, Math.min(98, H.x)); } }
     } else H.mode = 'idle';
-    let y = 0, pose; const rt = t - H.react;
+    let y = 0, pose: Pose; const rt = t - H.react;
     const st = H.stage;
     if (rt < 0.9 && H.kind !== 'nap') { const ph = (rt / 0.45) % 1; y = -Math.round(Math.sin(ph * Math.PI) * 5); pose = { eyes: 'happy', mouth: 'open', sq: ph < 0.12 || ph > 0.88 ? 1 : -1 }; }
     else if (sleepy) { pose = { eyes: 'sleep', mouth: 'dot', sq: Math.floor(t * 0.8) % 2 }; if (Math.random() < dt * 0.7) H.parts.add({ img: zzz(), x: H.x + 22, y: 50, vx: 4, vy: -8, life: 2, fade: 0.6 }); }
@@ -102,23 +104,33 @@ export function makeHome(canvas) {
     s.img(spr(g, pose), H.x, 52 + y, H.mode === 'walk' && H.dir > 0);
     H.parts.step(dt); H.parts.draw(s);
   };
-  return home;
+  return Object.assign(home, { set, react });
 }
 
 /* ---------- battle replay ---------- */
-export function makeBattle(canvas) {
+/** What a replay needs: both snapshots and the battle seed (the fight is re-simulated), plus the viewer's loot if any. */
+export interface Replay { a: Snapshot; b: Snapshot; seed: string; loot?: string | null; lootNote?: string | null }
+export interface PlayOpts { speed?: number; onDone?: (res: BattleResult) => void }
+type Side = 'L' | 'R';
+interface Scheduled { ev: BattleEvent; t0: number; dur: number; hitAt: number; crit: boolean }
+interface DamagePop { x: number; y: number; v: string; t0: number; col?: string; crit?: boolean }
+interface BattleRun {
+  rep: Replay; res: BattleResult; snaps: Snapshot[]; gs: Genome[]; L: number; Rr: number; sched: Scheduled[]; end: number; t0: number; speed: number;
+  parts: Particles; dmg: DamagePop[]; fired: Record<string, number>; gh: number[]; ghD: number[]; onDone?: (res: BattleResult) => void; loot: string | null; doneFired: boolean;
+}
+export function makeBattle(canvas: HTMLCanvasElement) {
   const battle = new Stage(canvas, 160, 90, '#2c2146'); battle.floor = [52, '#3b2c55'];
   const PX = 26, RX = 102, GY = 74;
   const racks = Array.from({ length: 9 }, (_, i) => ({ x: i * 19 - 4, h: 14 + ((i * 7) % 11), w: 12 }));
-  let R = null;
+  let current: BattleRun | null = null;
   const cc = chestClosed(), co = chestOpen();
-  battle.play = (rep, viewerSide, opts: any = {}) => {
+  const play = (rep: Replay, viewerSide: number, opts: PlayOpts = {}) => {
     // Re-simulate from seed + snapshots: the replay is never stored as frames.
     const res = simulate(rep.a, rep.b, rep.seed);
     const snaps = [rep.a, rep.b];
     const L = viewerSide, Rr = 1 - viewerSide;
     const gs = snaps.map(s => { const g = { ...genome(s.seed) }; g.items = s.items || {}; g.id = g.id + '|' + (s.items ? Object.values(s.items).join('.') : ''); return g; });
-    const sched = []; let t = 1.2;
+    const sched: Scheduled[] = []; let t = 1.2;
     for (const ev of res.events) {
       const dur = ev.kind === 'special' ? 1.55 : ev.kind === 'strike' ? 1.25 : ev.kind === 'faint' ? 1.3 : 0.95;
       const crit = ev.crit || ev.kind === 'special';
@@ -126,25 +138,24 @@ export function makeBattle(canvas) {
       sched.push({ ev, t0: t, dur, hitAt, crit }); t += dur;
     }
     const end = t;
-    R = { rep, res, snaps, gs, L, Rr, sched, end, t0: battle.t, speed: opts.speed || 1, parts: new Particles(), dmg: [], fired: {}, gh: [res.maxHp[0], res.maxHp[1]], hpShown: [res.maxHp[0], res.maxHp[1]], ghD: [0, 0], onDone: opts.onDone, loot: viewerSide === 0 ? rep.loot ?? res.loot : null, doneFired: false };
+    current = { rep, res, snaps, gs, L, Rr, sched, end, t0: battle.t, speed: opts.speed || 1, parts: new Particles(), dmg: [], fired: {}, gh: [res.maxHp[0], res.maxHp[1]], ghD: [0, 0], onDone: opts.onDone, loot: viewerSide === 0 ? rep.loot ?? res.loot : null, doneFired: false };
     return res;
   };
-  battle.setSpeed = v => { if (R) { const T = (battle.t - R.t0) * R.speed; R.speed = v; R.t0 = battle.t - T / v; } };
-  battle.skip = () => { if (R) R.t0 = battle.t - (R.end + 0.2) / R.speed; };
-  battle.clear = () => { R = null; };
+  const setSpeed = (v: number) => { if (current) { const T = (battle.t - current.t0) * current.speed; current.speed = v; current.t0 = battle.t - T / v; } };
+  const skip = () => { if (current) current.t0 = battle.t - (current.end + 0.2) / current.speed; };
   battle.draw = (x, t, dt) => {
-    const s = battle;
+    const s = battle, R = current;
     s.rect(0, 0, 160, 90, '#2c2146'); s.rect(0, 20, 160, 10, '#33274f'); s.rect(0, 30, 160, 10, '#3a2d58'); s.rect(0, 40, 160, 12, '#413361');
     for (const r of racks) { s.rect(r.x, 52 - r.h, r.w, r.h, '#2a1f3d'); for (let yy = 52 - r.h + 2; yy < 50; yy += 3) { s.rect(r.x + 2, yy, r.w - 4, 1, '#33264c'); if (Math.floor(t * 2 + r.x + yy) % 5 === 0) s.rect(r.x + r.w - 4, yy, 1, 1, (r.x + yy) % 3 ? '#6fdc9c' : '#ff6f62'); } }
     s.rect(0, 52, 160, 38, '#3b2c55'); s.rect(0, 52, 160, 1, '#4a3a6b'); for (let yy = 57; yy < 90; yy += 6) s.rect(0, yy, 160, 1, '#43325f');
     for (const cx of [PX + 16, RX + 16]) { for (let yy = 0; yy < 4; yy++) { const w = 34 - Math.abs(1.5 - yy) * 6; s.rect(cx - w / 2, GY - 1 + yy, w, 1, yy === 0 ? '#7a6a9b' : '#5a4a7b'); } }
     if (!R) { s.text('Find a battle to start', 80, 40, 7, '#b9a8cf', 'center'); return; }
     const T = (t - R.t0) * R.speed, sdt = dt * R.speed;
-    const once = (k, f) => { if (!R.fired[k]) { R.fired[k] = 1; f(); } };
-    const side = i => (i === R.L ? 'L' : 'R');
+    const once = (k: string, f: () => void) => { if (!R.fired[k]) { R.fired[k] = 1; f(); } };
+    const side = (i: number): Side => (i === R.L ? 'L' : 'R');
     const X = { L: PX, R: RX };
     const dx = { L: 0, R: 0 }, dy = { L: 0, R: 0 };
-    const pose = { L: idlePose(R.gs[R.L], t), R: idlePose(R.gs[R.Rr], t + 1.3) };
+    const pose: Record<Side, Pose> = { L: idlePose(R.gs[R.L], t), R: idlePose(R.gs[R.Rr], t + 1.3) };
     const vis = { L: true, R: true };
     let msg = `${R.gs[R.L].name} vs @${R.snaps[R.Rr].handle}'s ${R.gs[R.Rr].name}`;
     const hp = [R.res.maxHp[0], R.res.maxHp[1]];
@@ -215,30 +226,30 @@ export function makeBattle(canvas) {
       if (!R.doneFired && a > (R.loot ? 4.2 : 1.5)) { R.doneFired = true; R.onDone && R.onDone(R.res); }
     }
     // shadows and sprites
-    for (const k of ['L', 'R']) { if (!vis[k]) continue; s.rect(X[k] + 8 + Math.round(dx[k]), GY - 1, 16, 1, '#1c1530'); }
-    for (const k of ['L', 'R']) { if (!vis[k]) continue; const i = k === 'L' ? R.L : R.Rr; const p = { ...pose[k], stage: R.snaps[i].stage, phase: Math.floor(t * 5) % 2 }; s.img(spr(R.gs[i], p), X[k] + dx[k], GY - 30 + dy[k], k === 'R'); }
+    for (const k of ['L', 'R'] as const) { if (!vis[k]) continue; s.rect(X[k] + 8 + Math.round(dx[k]), GY - 1, 16, 1, '#1c1530'); }
+    for (const k of ['L', 'R'] as const) { if (!vis[k]) continue; const i = k === 'L' ? R.L : R.Rr; const p = { ...pose[k], stage: R.snaps[i].stage, phase: Math.floor(t * 5) % 2 }; s.img(spr(R.gs[i], p), X[k] + dx[k], GY - 30 + dy[k], k === 'R'); }
     // HP with ghost bars
     for (const i of [0, 1]) { if (R.ghD[i] > 0) R.ghD[i] -= sdt; else R.gh[i] = Math.max(hp[i], R.gh[i] - 60 * sdt); if (R.gh[i] < hp[i]) R.gh[i] = hp[i]; }
-    const hud = (x0, i) => { const g = R.gs[i], max = R.res.maxHp[i]; s.panel(x0, 3, 64, 17, INK, '#4a3a6b'); s.text(g.name, x0 + 3, 4.5, 5.5, '#fff2dc'); s.text('Lv ' + R.snaps[i].level, x0 + 61, 5, 4.5, '#b9a8cf', 'right');
+    const hud = (x0: number, i: number) => { const g = R.gs[i], max = R.res.maxHp[i]; s.panel(x0, 3, 64, 17, INK, '#4a3a6b'); s.text(g.name, x0 + 3, 4.5, 5.5, '#fff2dc'); s.text('Lv ' + R.snaps[i].level, x0 + 61, 5, 4.5, '#b9a8cf', 'right');
       s.rect(x0 + 3, 14, 58, 4, '#0f0a17'); const w = Math.round(56 * R.gh[i] / max), f = Math.round(56 * hp[i] / max); s.rect(x0 + 4, 15, w, 2, '#fff2dc'); s.rect(x0 + 4, 15, f, 2, hp[i] / max > 0.5 ? '#6fdc9c' : hp[i] / max > 0.2 ? '#ffd166' : '#ff6f62'); };
     hud(3, R.L); hud(93, R.Rr);
     for (const d of R.dmg) { const a = (t - d.t0) * R.speed; if (a > 1.1) continue; const pop = 1 + 0.7 * Math.max(0, 1 - a / 0.12); const sz = (d.crit ? 10 : 8) * pop; const al = 1 - clamp01((a - 0.8) / 0.3);
       x.globalAlpha = al; s.text(d.v, d.x + 1, d.y - a * 8 + 1, sz, INK, 'center', 700); s.text(d.v, d.x, d.y - a * 8, sz, d.col || (d.crit ? '#ffd166' : '#fff2dc'), 'center', 700); if (d.crit && a < 0.9) s.text('Critical', d.x, d.y - a * 8 - 7, 5, '#ff86bd', 'center', 700); x.globalAlpha = 1; }
     R.parts.step(sdt); R.parts.draw(s);
     s.panel(3, 79, 154, 9, 'rgba(26,17,36,0.9)', '#4a3a6b'); s.text(msg.length > 46 ? msg.slice(0, 45) + '…' : msg, 6, 80.2, 5.5, '#fff2dc');
-    function spark(cx, cy, n) { for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2 + Math.random() * 0.3, v = 40 + Math.random() * 40; R.parts.add({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, drag: 4, s: 1, c: i % 3 ? '#ffd166' : '#ffffff', life: 0.35, fade: 0.2 }); } }
+    function spark(cx: number, cy: number, n: number) { for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2 + Math.random() * 0.3, v = 40 + Math.random() * 40; R!.parts.add({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, drag: 4, s: 1, c: i % 3 ? '#ffd166' : '#ffffff', life: 0.35, fade: 0.2 }); } }
   };
-  return battle;
+  return Object.assign(battle, { play, setSpeed, skip });
 }
 
 /* ---------- evolution ---------- */
-export function makeEvo(canvas, g, from, to, chips, onDone) {
+export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: number, chips: [string, string][], onDone?: () => void) {
   const evo = new Stage(canvas, 96, 72, '#1c1530');
-  const E = { parts: new Particles(), fired: {}, done: false, t0: evo.t }; const LEN = 7.5;
-  const swaps = []; { let tt = 1.45, d = 0.42; while (tt < 3.8) { swaps.push(tt); tt += d; d = Math.max(0.045, d * 0.8); } }
+  const E = { parts: new Particles(), fired: {} as Record<string, number>, done: false, t0: evo.t }; const LEN = 7.5;
+  const swaps: number[] = []; { let tt = 1.45, d = 0.42; while (tt < 3.8) { swaps.push(tt); tt += d; d = Math.max(0.045, d * 0.8); } }
   evo.draw = (x, t, dt) => {
     const s = evo, T = t - E.t0, bR = RAMPS[g.pal[0]];
-    const once = (k, f) => { if (!E.fired[k]) { E.fired[k] = 1; f(); } };
+    const once = (k: string, f: () => void) => { if (!E.fired[k]) { E.fired[k] = 1; f(); } };
     s.rect(0, 0, 96, 72, '#1c1530');
     for (let yy = 0; yy < 4; yy++) { const w = 40 - Math.abs(1.5 - yy) * 8; s.rect(48 - w / 2, 58 + yy, w, 1, yy === 0 ? '#4a3a6b' : '#33264c'); }
     const gx = 32, gy = 59 - 30;
@@ -251,7 +262,7 @@ export function makeEvo(canvas, g, from, to, chips, onDone) {
     else {
       once('burst', () => { for (let i = 0; i < (RM ? 10 : 36); i++) { const an = Math.random() * Math.PI * 2, v = 30 + Math.random() * 60; E.parts.add({ x: 48, y: 44, vx: Math.cos(an) * v, vy: Math.sin(an) * v, drag: 2, s: Math.random() < 0.3 ? 2 : 1, c: [bR[2], bR[3], '#ffd166', '#fff2dc'][i % 4], life: 1.2 + Math.random() * 0.8, fade: 0.5 }); } });
       const a = T - 3.8; s.rays(48, 44, 70, t * 0.5, '#fff2dc', 0.10, 14); s.glow(48, 44, 30, bR[3], 0.3);
-      let y = 0, pose; if (a > 0.5 && a < 1.2) { const ph = ((a - 0.5) / 0.35) % 1; y = -Math.round(Math.sin(ph * Math.PI) * 4); pose = { stage: to, eyes: 'happy', mouth: 'open', sq: ph < 0.12 || ph > 0.88 ? 1 : -1 }; }
+      let y = 0, pose: Pose; if (a > 0.5 && a < 1.2) { const ph = ((a - 0.5) / 0.35) % 1; y = -Math.round(Math.sin(ph * Math.PI) * 4); pose = { stage: to, eyes: 'happy', mouth: 'open', sq: ph < 0.12 || ph > 0.88 ? 1 : -1 }; }
       else pose = idlePose(g, t, { stage: to }); pose.phase = Math.floor(t * 5) % 2;
       s.img(spr(g, pose), gx, gy + y);
       chips.forEach(([txt, c], i) => { const ca = a - 0.9 - i * 0.35; if (ca < 0) return; const sc = ease.back(clamp01(ca / 0.3)); const w = txt.length * 2.9 + 6; const cx0 = 48 - w / 2;

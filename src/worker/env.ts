@@ -12,4 +12,5 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   PUBLIC_ORIGIN?: string;
   DEMO_LOGIN?: string; // "on" (default) or "off"
+  NPCS?: string; // "on" (default) or "off": house NPC players seed, care, battle and appear in rankings
 }
