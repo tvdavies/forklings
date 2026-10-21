@@ -28,6 +28,7 @@ import {
   withOAuthStore,
 } from './oauth';
 import type { PlayerDO, PlayerView } from './player';
+import { limitRegistration, REGISTER_PATH } from './ratelimit';
 import { effectiveScopes, isAuthorizeReturn } from './scopes';
 
 export { BattleDO } from './battle';
@@ -416,6 +417,8 @@ function oauthRoute(req: Request, env: Env, ctx: ExecutionContext, url: URL): Pr
   const oenv = withOAuthStore(env);
   const { as, rs } = servers(publicOrigin(env, req));
   if (isMcp) return rs.fetch(req, oenv, ctx);
+  if (isAs && p === REGISTER_PATH)
+    return limitRegistration(req, env.REGISTER_LIMITER).then((limited) => limited ?? as.fetch(req, oenv, ctx));
   if (isAs) return as.fetch(req, oenv, ctx);
   return authorize(req, oenv, as, {
     session: (r) => sessionOf(r, env),

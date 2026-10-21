@@ -117,7 +117,7 @@ Any MCP client with OAuth support finds everything from the `401` on `POST https
 | Authorization server metadata | `https://forklings.dev/.well-known/oauth-authorization-server` |
 | Authorize, token, registration | `/authorize`, `/oauth/token`, `/oauth/register` |
 
-Authorization code with PKCE (S256) only, public or confidential clients, refresh-token rotation, and RFC 8707 resource indicators: tokens are issued for `https://forklings.dev/mcp` and nothing else. A call that needs a permission the token lacks gets `403` with `WWW-Authenticate: Bearer error="insufficient_scope"`, naming the scopes to ask for.
+Authorization code with PKCE (S256) only, public or confidential clients, refresh-token rotation, and RFC 8707 resource indicators: tokens are issued for `https://forklings.dev/mcp` and nothing else. A call that needs a permission the token lacks gets `403` with `WWW-Authenticate: Bearer error="insufficient_scope"`, naming the scopes to ask for. Dynamic Client Registration is open but capped at 10 registrations a minute per IP address; past that, `/oauth/register` answers `429` with `Retry-After: 60`.
 
 Or send JSON-RPC with a personal token and `Accept: application/json, text/event-stream`. The server is stateless and answers with plain JSON. Browser origins other than forklings.dev are refused.
 

@@ -11,6 +11,7 @@ export interface Env {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   PUBLIC_ORIGIN?: string;
+  REGISTER_LIMITER?: RateLimit; // caps POST /oauth/register per client IP (see ratelimit.ts)
   DEMO_LOGIN?: string; // "on" (default) or "off"
   NPCS?: string; // "on" (default) or "off": house NPC players seed, care, battle and appear in rankings
 }
