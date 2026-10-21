@@ -229,7 +229,7 @@ function cardHTML(g: Genome) {
 }
 function initHatch() {
   // Before hatching, the egg is a neutral placeholder: the real seed doesn't exist until you press Hatch.
-  const placeholder = genome('0f0rk11ng5000000000000000000000000000000000000000000000000000000');
+  const placeholder = genome('0f0e1e5000000000000000000000000000000000000000000000000000000000');
   placeholder.pal = ['frost', 'lilac'];
   const hatchStage = makeHatch($<HTMLCanvasElement>('hatchCanvas'), {
     g: placeholder,

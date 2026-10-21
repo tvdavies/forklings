@@ -35,7 +35,7 @@ main{max-width:1200px;margin:0 auto;padding:8px 18px calc(var(--tabs-h) + 28px +
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
 /* pixel chrome */
-.btn{--bc:var(--ink);font:600 19px/1 var(--f-pixel);color:var(--ink);background:var(--butter);border:0;padding:13px 20px;margin:4px;cursor:pointer;
+.btn{--bc:var(--ink);font:600 19px/1 var(--f-pixel);color:var(--ink);background:var(--butter);border:0;padding:13px 20px;margin:4px;cursor:pointer;min-height:44px;
   box-shadow:inset -4px -4px 0 0 var(--butter-sh),inset 4px 4px 0 0 var(--butter-hi),var(--ring);transition:transform .06s;touch-action:manipulation}
 .btn:active{transform:translateY(3px);box-shadow:inset 4px 4px 0 0 var(--butter-sh),var(--ring)}
 .btn.ghost{background:var(--dusk2);color:var(--moon);box-shadow:inset -4px -4px 0 0 #271d3b,inset 4px 4px 0 0 #4a3a6b,var(--ring)}
@@ -136,7 +136,7 @@ input[type=range]{width:100%;max-width:420px;accent-color:var(--butter);height:2
 /* tabs */
 .tabs{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;gap:4px;background:rgba(28,21,48,.94);backdrop-filter:blur(6px);
   border-top:4px solid var(--ink);padding:6px 8px calc(6px + env(safe-area-inset-bottom));z-index:10}
-.tabs a{flex:1;max-width:150px;text-align:center;font:600 16px/1 var(--f-pixel);color:var(--haze);text-decoration:none;padding:14px 4px;position:relative}
+.tabs a{flex:1;max-width:150px;min-height:48px;display:flex;align-items:center;justify-content:center;font:600 16px/1 var(--f-pixel);color:var(--haze);text-decoration:none;padding:14px 4px;position:relative}
 .tabs a[aria-current=page]{color:var(--ink);background:var(--butter);box-shadow:inset -3px -3px 0 0 var(--butter-sh),inset 3px 3px 0 0 var(--butter-hi)}
 .tabs .dot{position:absolute;top:8px;right:18%;width:8px;height:8px;background:var(--coral)}
 
