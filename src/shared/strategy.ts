@@ -1,6 +1,6 @@
 // The one strategy form every battle runs on. Coaching tactics (sliders and
-// choices) compile to it, and so will hand-written strategy scripts: both become
-// an ordered list of rules whose conditions are a small expression AST.
+// choices) and strategy scripts (src/shared/script.ts) both compile to it: an
+// ordered list of rules whose conditions are a small expression AST.
 // The interpreter has a fuel budget per decision and never evaluates code.
 
 import { oneOf, prop } from './json';

@@ -159,6 +159,13 @@ export interface Pose {
   L?: number;
   noItems?: boolean;
 }
+/** The resting animation at time t (seconds): a two-beat bob, blinks and tail sway. */
+export function idlePose(g: Pick<Genome, 'blinkOff'>, t: number, extra?: Pose): Pose {
+  const b = Math.floor((t + g.blinkOff) * 2) % 2,
+    bt = (t + g.blinkOff * 1.7) % 3.9;
+  return Object.assign({ sq: b, eyes: bt < 0.13 ? 'blink' : undefined, phase: Math.floor(t * 5) % 2 }, extra || {});
+}
+
 /** One pixel: a '#rrggbb' colour, or null for transparent. */
 export type Px = string | null;
 export interface SpriteMeta {

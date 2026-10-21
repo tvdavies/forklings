@@ -5,10 +5,14 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs && wrangler dev",
-    "test": "bun test test/unit",
-    "e2e": "node test/e2e/run.mjs",
     "deploy": "node scripts/build.mjs && wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "bun test test/unit",
+    "e2e": "bun test/e2e/run.ts",
+    "art": "bun scripts/art.ts",
+    "icons": "bun scripts/icons.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
@@ -18,5 +22,7 @@
     "playwright-core": "^1.64.1",
     "typescript": "^7.0.2",
     "wrangler": "^4.151.3"
-  }
+  },
+  "description": "A pixel pet and auto-battler for developers, on Cloudflare Workers",
+  "license": "MIT"
 }

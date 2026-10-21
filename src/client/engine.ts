@@ -76,11 +76,7 @@ export function itemIcon(id: string) {
   }
   return c;
 }
-export function idlePose(g: Pick<Genome, 'blinkOff'>, t: number, extra?: Pose): Pose {
-  const b = Math.floor((t + g.blinkOff) * 2) % 2,
-    bt = (t + g.blinkOff * 1.7) % 3.9;
-  return Object.assign({ sq: b, eyes: bt < 0.13 ? 'blink' : undefined, phase: Math.floor(t * 5) % 2 }, extra || {});
-}
+export { idlePose } from '../shared/compose';
 
 export const CHEST_C = { W: '#86523a', w: '#c08458', y: '#ffd166', k: '#1a1124', D: '#4f2c2c', b: '#2a1f3d' };
 export const chestClosed = () =>

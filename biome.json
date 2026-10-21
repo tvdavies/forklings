@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "files": {
-    "includes": ["src/**", "test/**", "scripts/**", "plugins/**/*.json", ".claude-plugin/**", "*.json", "!public/app.js"]
+    "includes": ["src/**", "test/**", "scripts/**", "plugins/**/*.json", ".claude-plugin/**", "*.json"]
   },
   "formatter": {
     "indentStyle": "space",
@@ -18,12 +18,12 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "style": {
         "noNonNullAssertion": "off"
       },
       "suspicious": {
-        "noExplicitAny": "warn"
+        "noExplicitAny": "error"
       }
     }
   },

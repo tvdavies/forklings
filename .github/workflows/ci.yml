@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint and format
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Build client
+        run: npm run build
+      - name: Validate Claude Code plugin manifests
+        run: node scripts/check-plugin.mjs
