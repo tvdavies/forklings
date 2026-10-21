@@ -1,6 +1,19 @@
 node_modules/
 .wrangler/
+dist/
+
+# Built by scripts/build.mjs
 public/app.js
 public/app.js.map
+
+# Local secrets for `wrangler dev`; never commit these
 .dev.vars
+.dev.vars.*
+.env
+.env.*
+
+# End-to-end test output (screenshots, traces)
 test/e2e/out/
+
+.DS_Store
+*.log
