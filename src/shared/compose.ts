@@ -1086,26 +1086,14 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
         break;
     }
   }
+  // Ink outline on empty pixels next to anything solid (the hot loop of every draw: kept allocation-free).
   const out = cols.slice();
+  const solid = (j: number) => !!cols[j] && grp[j] !== GR.LINE && grp[j] !== GR.STALK;
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
       if (cols[i]) continue;
-      for (const [dx, dy] of [
-        [1, 0],
-        [-1, 0],
-        [0, 1],
-        [0, -1],
-      ]) {
-        const xx = x + dx,
-          yy = y + dy;
-        if (!inb(xx, yy)) continue;
-        const j = yy * W + xx;
-        if (cols[j] && grp[j] !== GR.LINE && grp[j] !== GR.STALK) {
-          out[i] = INK;
-          break;
-        }
-      }
+      if ((x < W - 1 && solid(i + 1)) || (x > 0 && solid(i - 1)) || (y < H - 1 && solid(i + W)) || (y > 0 && solid(i - W))) out[i] = INK;
     }
   if (pose.flash) for (let i = 0; i < N; i++) if (out[i] && out[i] !== INK) out[i] = '#ffffff';
   if (pose.sil) for (let i = 0; i < N; i++) if (out[i]) out[i] = pose.sil;
@@ -1188,10 +1176,12 @@ export function cropCols(cols: Px[], w: number, h: number) {
 }
 
 /** An item as it looks when worn on the mannequin, alone, outlined and cropped. */
-export function itemWornCols(d: ItemDef) {
+export function itemWornCols(d: ItemDef, id?: string) {
   const items: Record<string, string | null> = noItems();
-  items[d.slot] = '_';
-  const { cols } = compose({ ...MANNEQUIN, items, gear: { _: d } }, { stage: 1, itemsOnly: true });
+  // A classic is drawn by its id: some (glasses, shades, scarf, headphones) are drawn in code, not from a map.
+  const classic = id !== undefined && ITEMS[id] === d;
+  items[d.slot] = classic ? id : '_';
+  const { cols } = compose({ ...MANNEQUIN, items, gear: classic ? {} : { _: d } }, { stage: 1, itemsOnly: true });
   return cropCols(cols, 32, 32);
 }
 
