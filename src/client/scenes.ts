@@ -15,6 +15,7 @@ import {
   itemIcon,
   Particles,
   RM,
+  type SpriteCanvas,
   Stage,
   shield,
   snack,
@@ -195,7 +196,67 @@ interface HomeState {
   kind: string;
   parts: Particles;
   hop: number;
+  bubble: { lines: string[]; ok: boolean; t0: number; dur: number } | null;
 }
+
+// Speech bubble: Pixelify at 6 art pixels, wrapped to at most two lines.
+const BUBBLE_SIZE = 6,
+  BUBBLE_LINE = 7,
+  BUBBLE_PAD = 3,
+  BUBBLE_MAX_W = 66;
+/** Splits on plain spaces only, so a non-breaking space keeps "+6 XP" together. */
+function wrapBubble(st: Stage, text: string): string[] {
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of text.split(/ +/).filter(Boolean)) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (cur && st.measure(next, BUBBLE_SIZE) > BUBBLE_MAX_W) {
+      lines.push(cur);
+      cur = w;
+    } else cur = next;
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > 2) lines.splice(1, lines.length - 1, `${lines.slice(1).join(' ')}`);
+  return lines;
+}
+/** The first row of a sprite with any pixels in it: where the head is. */
+const tops = new WeakMap<SpriteCanvas, number>();
+function spriteTop(c: SpriteCanvas) {
+  let top = tops.get(c);
+  if (top === undefined) {
+    const i = c.cols.findIndex(Boolean);
+    top = i < 0 ? 0 : Math.floor(i / c.width);
+    tops.set(c, top);
+  }
+  return top;
+}
+/** A pixel speech bubble whose tail points down at `cx`, with its bottom edge at `by`. Coral edge when the care didn't work. */
+function drawBubble(st: Stage, b: NonNullable<HomeState['bubble']>, cx: number, by: number, t: number) {
+  const age = t - b.t0;
+  const w = Math.ceil(Math.max(...b.lines.map((l) => st.measure(l, BUBBLE_SIZE)))) + BUBBLE_PAD * 2;
+  const h = b.lines.length * BUBBLE_LINE + BUBBLE_PAD * 2 - 1;
+  const rise = RM ? 0 : age < 0.12 ? 2 : 0;
+  const x = Math.max(2, Math.min(st.aw - 2 - w, Math.round(cx - w / 2))),
+    y = by - h - 3 + rise;
+  const fade = clamp01((b.dur - age) / 0.3);
+  const edge = b.ok ? INK : '#ff6f62';
+  st.ctx.globalAlpha = fade;
+  st.rect(x + 1, y, w - 2, h, edge);
+  st.rect(x, y + 1, w, h - 2, edge);
+  st.rect(x + 1, y + 1, w - 2, h - 2, '#fff2dc');
+  const tx = Math.max(x + 3, Math.min(x + w - 6, Math.round(cx) - 1));
+  st.rect(tx, y + h - 1, 3, 1, '#fff2dc');
+  st.rect(tx - 1, y + h - 1, 1, 2, edge);
+  st.rect(tx + 3, y + h - 1, 1, 1, edge);
+  st.rect(tx + 2, y + h, 1, 2, edge);
+  st.rect(tx, y + h, 2, 1, '#fff2dc');
+  st.rect(tx, y + h + 1, 2, 1, edge);
+  b.lines.forEach((l, i) => {
+    st.text(l, x + w / 2, y + BUBBLE_PAD + i * BUBBLE_LINE - 1, BUBBLE_SIZE, INK, 'center');
+  });
+  st.ctx.globalAlpha = 1;
+}
+
 export function makeHome(canvas: HTMLCanvasElement) {
   const home = new Stage(canvas, 160, 90, '#3b2c55');
   home.floor = [64, '#7a4a34'];
@@ -212,6 +273,12 @@ export function makeHome(canvas: HTMLCanvasElement) {
     kind: '',
     parts: new Particles(),
     hop: 0,
+    bubble: null,
+  };
+  /** Show care feedback in a speech bubble over the pet. */
+  const say = (text: string, ok = true) => {
+    const lines = wrapBubble(home, text);
+    H.bubble = lines.length ? { lines, ok, t0: home.t, dur: Math.min(4.5, 2.2 + text.length * 0.04) } : null;
   };
   const set = (g: Genome, stage: number, napping: boolean, mood: string) => {
     H.g = g;
@@ -392,8 +459,10 @@ export function makeHome(canvas: HTMLCanvasElement) {
     s.img(spr(g, pose), H.x, 52 + y, H.mode === 'walk' && H.dir > 0);
     H.parts.step(dt);
     H.parts.draw(s);
+    if (H.bubble && t - H.bubble.t0 > H.bubble.dur) H.bubble = null;
+    if (H.bubble) drawBubble(s, H.bubble, H.x + 16, 52 + spriteTop(spr(g, { stage: st })) - 3, t);
   };
-  return Object.assign(home, { set, react });
+  return Object.assign(home, { set, react, say });
 }
 
 /* ---------- battle replay ---------- */

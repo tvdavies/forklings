@@ -276,9 +276,17 @@ export class Stage {
     this.ctx.fillStyle = col;
     this.ctx.fillRect(this.ox + Math.round(ax) * this.P, this.oy + Math.round(ay) * this.P, Math.round(w) * this.P, Math.round(h) * this.P);
   }
+  private font(size: number, weight?: number) {
+    return `${weight || 600} ${Math.max(8, Math.round(size * this.P))}px "Pixelify Sans", system-ui, sans-serif`;
+  }
+  /** Width of `s` in art pixels, as `text` would draw it. */
+  measure(s: string, size: number, weight?: number) {
+    this.ctx.font = this.font(size, weight);
+    return this.ctx.measureText(s).width / this.P;
+  }
   text(s: string, ax: number, ay: number, size: number, col: string, align?: CanvasTextAlign, weight?: number) {
     const x = this.ctx;
-    x.font = `${weight || 600} ${Math.max(8, Math.round(size * this.P))}px "Pixelify Sans", system-ui, sans-serif`;
+    x.font = this.font(size, weight);
     x.fillStyle = col;
     x.textAlign = align || 'left';
     x.textBaseline = 'top';

@@ -55,17 +55,18 @@
   </section>
 
   <section class="view" id="v-home" hidden>
+    <section class="panel firstday" id="firstDay" aria-labelledby="fdTitle" hidden></section>
     <div class="home-grid">
       <div>
         <div class="stage ar169"><canvas id="homeCanvas" aria-label="Your Forkling at home"></canvas></div>
-        <div class="namebar"><span class="nm" id="petName"></span><span class="stars" id="petStars"></span><span class="dim small" id="petMeta"></span></div>
+        <div class="namebar"><span class="nm" id="petName"></span><span class="stars" id="petStars"></span><span class="chips" id="petChips"></span><span class="dim small" id="petMeta"></span></div>
         <div class="care" role="group" aria-label="Care">
           <button class="btn" data-care="feed" type="button">Feed</button>
           <button class="btn" data-care="play" type="button">Play</button>
           <button class="btn ghost" data-care="pat" type="button">Pat</button>
           <button class="btn ghost" data-care="nap" type="button" id="napBtn">Nap</button>
         </div>
-        <p class="toastline" id="careMsg" aria-live="polite"></p>
+        <p class="visually-hidden" id="careMsg" aria-live="polite"></p>
       </div>
       <div>
         <div class="panel stats" id="stats"></div>
