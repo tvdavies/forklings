@@ -393,7 +393,7 @@ function startEvolution() {
   $('evoMsg').textContent = `${S.g!.name} is evolving into a ${STAGE_NAMES[to]}.`;
   const st = makeEvo($<HTMLCanvasElement>('evoCanvas'), S.g!, from, to, chips, () => {
     $('evoMsg').textContent = `${S.g!.name} is now a ${STAGE_NAMES[to]}: ${chips
-      .slice(0, -1)
+      .filter(([txt]) => txt.startsWith('+'))
       .map(([txt]) => txt)
       .join(', ')}.`;
     $('evoDone').hidden = false;
