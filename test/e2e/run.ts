@@ -103,10 +103,14 @@ await step('a battle plays out and lands in the log', async () => {
   await p.locator('#battleLog li [data-replay]').first().waitFor();
 });
 
-await step('leaderboard lists NPCs and this player as unranked', async () => {
+await step('leaderboard pins this player and keeps NPCs apart', async () => {
   await p.goto(`${BASE}/#ranks`);
-  await p.locator('#ranks li').first().waitFor();
-  expect((await p.locator('#ranks .badge.npc').count()) > 0, 'ranked list should include NPCs');
+  await p.locator('#rankMe').waitFor({ state: 'visible' });
+  const mine = (await p.textContent('#rankMe')) ?? '';
+  expect(mine.includes(`@${handle}`) && mine.includes('Unranked: GitHub account needed'), 'pinned row shows this demo player');
+  expect((await p.locator('#ranks .badge.npc').count()) === 0, 'ranked players list has no NPCs');
+  expect((await p.locator('#ranksN .badge.npc').count()) > 0, 'NPCs are listed under House NPCs');
+  expect(!(await p.locator('#ranksN').isVisible()), 'NPCs start collapsed');
   await p.waitForFunction((h) => (document.querySelector('#ranksU')?.textContent ?? '').includes(`@${h}`), handle);
   await shot(p, 'desktop-ranks');
 });
@@ -165,9 +169,15 @@ await step('phone: battle and leaderboard render', async () => {
   await m.waitForTimeout(2500);
   await shot(m, 'phone-battle');
   await m.goto(`${BASE}/#ranks`);
-  await m.locator('#ranks li').first().waitFor();
+  await m.locator('#rankMe').waitFor({ state: 'visible' });
   await m.waitForTimeout(400);
   await shot(m, 'phone-ranks');
+  // Open the NPC list so the page is long enough to scroll, then check the row stays pinned.
+  await m.locator('#npcFold summary').click();
+  await m.locator('#ranksN li').first().waitFor({ state: 'visible' });
+  await m.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const top = await m.evaluate(() => document.getElementById('rankMe')?.getBoundingClientRect().top ?? -1);
+  expect(top >= 0 && top < 20, `pinned row should stay at the top when scrolled, top is ${top}`);
 });
 
 await step('phone: tap targets are at least 44px tall', async () => {

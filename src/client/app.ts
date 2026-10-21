@@ -95,6 +95,15 @@ interface LeaderRow {
   draws: number;
   xp: number;
 }
+/** The viewer's own row; see MyPlace in src/worker/leaderboard.ts. */
+type MyPlace = LeaderRow &
+  ({ ranked: true; rank: number; of: number } | { ranked: false; reason: 'github' | 'age'; rankedAt: number | null });
+interface LeaderboardResponse {
+  players: LeaderRow[];
+  npcs: LeaderRow[];
+  unranked: LeaderRow[];
+  me: MyPlace | null;
+}
 interface TokenRow {
   id: string;
   name: string;
@@ -557,29 +566,62 @@ async function renderBattleLog() {
 }
 
 // ---------- leaderboard ----------
-function rankList(ol: HTMLElement, players: LeaderRow[], ranked: boolean) {
+/** A row's name, handle line and score cells (everything after the sprite). */
+function rankCells(p: LeaderRow, ranked: boolean, badge = true) {
+  const tag = !badge
+    ? ''
+    : p.npc
+      ? `<span class="badge npc" title="House NPC: ${esc(p.persona || '')}">NPC</span>`
+      : p.verified
+        ? ''
+        : '<span class="badge warn">unverified</span>';
+  return `<div><div class="nm">${esc(p.name)}</div><div class="hd">@${esc(p.handle)} ${tag} · Lv ${p.level} ${STAGE_NAMES[p.stage]}</div></div>
+    <div><div class="rt">${ranked ? p.rating : `${p.wins}W`}</div><div class="wl">${ranked ? `${p.wins}W ${p.losses}L${p.draws ? ` ${p.draws}D` : ''}` : `${p.losses}L · ${p.xp} XP`}</div></div>`;
+}
+function paintRow(cv: HTMLCanvasElement, p: LeaderRow) {
+  if (p.seed) paintStatic(cv, spr({ ...genome(p.seed) }, { stage: p.stage }), 48);
+}
+function rankList(ol: HTMLElement, players: LeaderRow[], ranked: boolean, empty: string) {
   if (!players.length) {
-    ol.innerHTML = `<li class="empty">${ranked ? 'No ranked players yet. Ranked play opens to GitHub accounts at least 30 days old.' : 'No one yet.'}</li>`;
+    ol.innerHTML = `<li class="empty">${empty}</li>`;
     return;
   }
   ol.innerHTML = players
     .map(
-      (p, i) => `<li class="${p.handle === S.me!.session.handle ? 'me' : ''}"><canvas data-i="${i}" aria-hidden="true"></canvas>
-    <div><div class="nm">${esc(p.name)}</div><div class="hd">@${esc(p.handle)} ${p.npc ? `<span class="badge npc" title="House NPC: ${esc(p.persona || '')}">NPC</span>` : p.verified ? '' : '<span class="badge warn">unverified</span>'} · Lv ${p.level} ${STAGE_NAMES[p.stage]}</div></div>
-    <div><div class="rt">${ranked ? p.rating : `${p.wins}W`}</div><div class="wl">${ranked ? `${p.wins}W ${p.losses}L${p.draws ? ` ${p.draws}D` : ''}` : `${p.losses}L · ${p.xp} XP`}</div></div></li>`,
+      (p, i) =>
+        `<li class="${p.handle === S.me!.session.handle ? 'me' : ''}"><canvas data-i="${i}" aria-hidden="true"></canvas>
+    ${rankCells(p, ranked)}</li>`,
     )
     .join('');
   ol.querySelectorAll('canvas').forEach((cv) => {
-    const p = players[Number(cv.dataset.i)];
-    if (!p.seed) return;
-    const g: Genome = { ...genome(p.seed) };
-    paintStatic(cv, spr(g, { stage: p.stage }), 48);
+    paintRow(cv, players[Number(cv.dataset.i)]);
   });
 }
+/** The pinned "You" row: your place, or why you're in the practice bracket. */
+function renderMyPlace(me: MyPlace | null) {
+  const box = $('rankMe');
+  box.hidden = !me;
+  if (!me) return;
+  let status: string;
+  if (me.ranked) status = `#${me.rank} of ${me.of} ranked ${me.of === 1 ? 'player' : 'players'}`;
+  else if (me.reason === 'github') status = 'Unranked: GitHub account needed';
+  else if (me.rankedAt === null) status = 'Practice: ranked play opens when your GitHub account is 30 days old';
+  else {
+    const days = Math.max(1, Math.ceil((me.rankedAt - Date.now()) / 86400e3));
+    status = `Practice: ranked play opens in ${days} ${days === 1 ? 'day' : 'days'}`;
+  }
+  box.innerHTML = `<div class="pos">${me.ranked ? `#${me.rank}` : '–'}<span>You</span></div><canvas aria-hidden="true"></canvas>
+    ${rankCells(me, me.ranked, false)}<p class="status">${esc(status)}</p>`;
+  paintRow(box.querySelector('canvas')!, me);
+}
 async function renderRanks() {
-  const r = await api<{ players: LeaderRow[]; unranked?: LeaderRow[] }>('/api/leaderboard');
-  rankList($('ranks'), r.players, true);
-  rankList($('ranksU'), r.unranked || [], false);
+  const r = await api<LeaderboardResponse>('/api/leaderboard');
+  renderMyPlace(r.me);
+  rankList($('ranks'), r.players, true, 'No ranked players yet. Ranked play opens to GitHub accounts at least 30 days old.');
+  rankList($('ranksU'), r.unranked, false, 'No one in practice right now.');
+  $('npcFold').hidden = !r.npcs.length;
+  $('npcCount').textContent = String(r.npcs.length);
+  rankList($('ranksN'), r.npcs, true, '');
 }
 
 // ---------- connected apps ----------
