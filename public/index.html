@@ -116,6 +116,7 @@
     <div class="battle-grid">
       <div>
         <div class="stage ar169"><canvas id="battleCanvas" aria-label="Battle replay"></canvas></div>
+        <ol class="sr-only" id="battleLines" aria-label="Battle narration" aria-live="polite"></ol>
         <div class="row under">
           <button class="btn" id="fightBtn" type="button">Find a battle</button>
           <button class="btn ghost small-btn" id="speedBtn" type="button">Speed ×1</button>
@@ -145,7 +146,7 @@
     <h2>Connect your tools</h2>
     <p class="dim">Look after your Forkling from Claude Code, Pi, Codex or any MCP client. Create a personal token here; revoke it any time and it stops working at once.</p>
     <div class="panel">
-      <form class="row" id="tokenForm"><input class="handle wide" id="tokenName" placeholder="Token name, e.g. laptop" maxlength="40"><button class="btn" type="submit">Create token</button></form>
+      <form class="row" id="tokenForm"><input class="handle wide" id="tokenName" aria-label="Token name" placeholder="Token name, e.g. laptop" maxlength="40"><button class="btn" type="submit">Create token</button></form>
       <p class="tokenout" id="tokenOut" hidden></p>
       <ul class="log" id="tokenList"></ul>
     </div>
@@ -177,9 +178,10 @@ GET  /api/leaderboard</pre>
   <a href="#api" data-tab="api">API</a>
 </nav>
 
-<div class="overlay" id="evoOverlay" hidden>
-  <div class="evo-box">
-    <div class="stage ar43"><canvas id="evoCanvas" aria-label="Evolution"></canvas></div>
+<div class="overlay" id="evoOverlay" role="dialog" aria-modal="true" aria-label="Evolution" hidden>
+  <div class="evo-box" id="evoBox" tabindex="-1">
+    <div class="stage ar43"><canvas id="evoCanvas" aria-hidden="true"></canvas></div>
+    <p class="sr-only" id="evoMsg" aria-live="polite"></p>
     <button class="btn" id="evoDone" type="button" hidden>Wonderful</button>
   </div>
 </div>

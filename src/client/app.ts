@@ -4,7 +4,7 @@ import { type BattleResult, fighter, HELD_EFFECTS, MOVES, type Snapshot, type Ta
 import { ITEMS, SLOTS } from '../shared/compose';
 import { describe, type Genome, genome, RARITY, RCOL, STAGE_NAMES } from '../shared/genome';
 import { type PetState, STAGE_XP } from '../shared/state';
-import { itemIcon, paintStatic, spr } from './engine';
+import { itemIcon, paintStatic, RM, spr } from './engine';
 import { makeBattle, makeEvo, makeHatch, makeHome } from './scenes';
 
 // ---------- API shapes (the fields of the Worker's JSON responses that the client reads) ----------
@@ -151,6 +151,8 @@ function petGenome(c: CreatureView): Genome {
 // ---------- routing ----------
 const VIEWS = ['login', 'hatch', 'home', 'coach', 'battle', 'ranks', 'api'];
 function show(v: string) {
+  // Picking a tab from the keyboard moves focus to the new screen, not back to the top of the page.
+  const fromTabs = S.view !== v && !!document.activeElement?.closest('#tabs');
   S.view = v;
   for (const id of VIEWS) $(`v-${id}`).hidden = id !== v;
   const authed = !!S.me;
@@ -164,6 +166,11 @@ function show(v: string) {
   if (v === 'ranks') renderRanks();
   if (v === 'api') renderTokens();
   window.scrollTo(0, 0);
+  if (fromTabs) {
+    const sec = $(`v-${v}`);
+    sec.tabIndex = -1;
+    sec.focus({ preventScroll: true });
+  }
 }
 function route() {
   if (!S.me) return show('login');
@@ -377,9 +384,18 @@ function startEvolution() {
     [`+${Math.round(after.atk - before.atk)} Attack`, '#ff6f62'],
     [`Now a ${STAGE_NAMES[to]}`, '#ffd166'],
   ];
+  // A modal moment: the page behind can't be reached until the player closes it.
+  const back = document.activeElement as HTMLElement | null;
+  for (const id of ['top', 'app', 'tabs']) $(id).inert = true;
   $('evoOverlay').hidden = false;
   $('evoDone').hidden = true;
+  $('evoBox').focus();
+  $('evoMsg').textContent = `${S.g!.name} is evolving into a ${STAGE_NAMES[to]}.`;
   const st = makeEvo($<HTMLCanvasElement>('evoCanvas'), S.g!, from, to, chips, () => {
+    $('evoMsg').textContent = `${S.g!.name} is now a ${STAGE_NAMES[to]}: ${chips
+      .slice(0, -1)
+      .map(([txt]) => txt)
+      .join(', ')}.`;
     $('evoDone').hidden = false;
     $('evoDone').focus();
   });
@@ -390,9 +406,11 @@ function startEvolution() {
       S.g = petGenome(S.me.creature!);
     } finally {
       $('evoOverlay').hidden = true;
+      for (const id of ['top', 'app', 'tabs']) $(id).inert = false;
       st.destroy();
       evoRunning = false;
       renderHome();
+      if (back?.isConnected) back.focus();
     }
   };
 }
@@ -466,6 +484,16 @@ function initCoach() {
 
 // ---------- battle ----------
 let speed = 1;
+/** Clears the hidden narration list and returns a callback that adds each canvas line to it, for screen readers. */
+function sayLine() {
+  const ol = $('battleLines');
+  ol.replaceChildren();
+  return (text: string) => {
+    const li = document.createElement('li');
+    li.textContent = text;
+    ol.appendChild(li);
+  };
+}
 function initBattle() {
   battleStage = makeBattle($<HTMLCanvasElement>('battleCanvas'));
   $('fightBtn').addEventListener('click', async () => {
@@ -478,6 +506,7 @@ function initBattle() {
         `vs @${out.b.handle}${out.b.bot ? ' (house bot)' : out.b.pid.startsWith('npc:') ? ' (NPC)' : out.b.verified ? '' : ' (unverified)'}`;
       battleStage.play(out, 0, {
         speed,
+        onLine: sayLine(),
         onDone: async (res: BattleResult) => {
           const won = res.winner === 0;
           $('battleMsg').textContent =
@@ -527,8 +556,8 @@ async function renderBattleLog() {
       const rep = await api<ReplayResponse>(`/api/battles/${encodeURIComponent(btn.dataset.replay!)}`);
       const loot = rep.side === 0 ? (r.battles.find((x) => x.id === rep.id)?.loot || '').split(':')[0] || null : null;
       $('battleMsg').textContent = `Replay vs @${rep.side === 0 ? rep.b.handle : rep.a.handle}`;
-      battleStage.play({ ...rep, loot }, rep.side, { speed });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      battleStage.play({ ...rep, loot }, rep.side, { speed, onLine: sayLine() });
+      window.scrollTo({ top: 0, behavior: RM ? 'auto' : 'smooth' });
     });
 }
 
