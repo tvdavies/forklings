@@ -408,6 +408,8 @@ export interface Replay {
 export interface PlayOpts {
   speed?: number;
   onDone?: (res: BattleResult) => void;
+  /** Called with each line of narration as it is shown, so the page can repeat it to screen readers. */
+  onLine?: (text: string) => void;
 }
 type Side = 'L' | 'R';
 interface Scheduled {
@@ -442,6 +444,7 @@ interface BattleRun {
   gh: number[];
   ghD: number[];
   onDone?: (res: BattleResult) => void;
+  onLine?: (text: string) => void;
   loot: string | null;
   doneFired: boolean;
 }
@@ -494,6 +497,7 @@ export function makeBattle(canvas: HTMLCanvasElement) {
       gh: [res.maxHp[0], res.maxHp[1]],
       ghD: [0, 0],
       onDone: opts.onDone,
+      onLine: opts.onLine,
       loot: viewerSide === 0 ? (rep.loot ?? res.loot) : null,
       doneFired: false,
     };
@@ -551,6 +555,7 @@ export function makeBattle(canvas: HTMLCanvasElement) {
     const pose: Record<Side, Pose> = { L: idlePose(R.gs[R.L], t), R: idlePose(R.gs[R.Rr], t + 1.3) };
     const vis = { L: true, R: true };
     let msg = `${R.gs[R.L].name} vs @${R.snaps[R.Rr].handle}'s ${R.gs[R.Rr].name}`;
+    once('sayStart', () => R.onLine?.(msg));
     const hp = [R.res.maxHp[0], R.res.maxHp[1]];
     for (const sc of R.sched) {
       const ev = sc.ev,
@@ -561,7 +566,10 @@ export function makeBattle(canvas: HTMLCanvasElement) {
         hp[0] = ev.hp[0];
         hp[1] = ev.hp[1];
       }
-      if (T >= sc.t0) msg = ev.text;
+      if (T >= sc.t0) {
+        msg = ev.text;
+        once(`say${sc.t0}`, () => R.onLine?.(ev.text));
+      }
       if (ev.kind === 'faint' && T >= sc.t0) {
         vis[me] = T < sc.t0 + 0.5;
         if (T < sc.t0 + 0.5) pose[me] = { eyes: 'closed', mouth: 'frown', sq: 1 };
@@ -663,6 +671,8 @@ export function makeBattle(canvas: HTMLCanvasElement) {
     }
     const won = R.res.winner === null ? null : R.res.winner === R.L;
     const after = T - R.end;
+    // The loot label is drawn after the sprites, so the opponent can't cover it.
+    let lootTag: { name: string; note: string; col: string; y: number; alpha: number } | null = null;
     if (after >= 0) {
       const a = after;
       if (won) {
@@ -673,7 +683,11 @@ export function makeBattle(canvas: HTMLCanvasElement) {
         } else pose.L = idlePose(R.gs[R.L], t, { eyes: 'happy' });
       } else if (won === false) pose.R = idlePose(R.gs[R.Rr], t + 1.3, { eyes: 'happy' });
       msg = won ? `Victory. +${R.res.xp[R.L]} XP` : won === false ? `Defeat. +${R.res.xp[R.L]} XP` : `Time! A draw. +${R.res.xp[R.L]} XP`;
-      if (R.loot && a > 2.2) msg = `Loot: ${ITEMS[R.loot]?.name}`;
+      once('sayEnd', () => R.onLine?.(msg));
+      if (R.loot && a > 2.2) {
+        msg = `Loot: ${ITEMS[R.loot]?.name}`;
+        once('sayLoot', () => R.onLine?.(msg));
+      }
       const yy = -14 + 38 * ease.back(clamp01(a / 0.35));
       const bc = won ? '#ffd166' : won === false ? '#ff6f62' : '#86bdff';
       if (a < (R.loot ? 2.2 : 99)) {
@@ -738,14 +752,14 @@ export function makeBattle(canvas: HTMLCanvasElement) {
           const ic = itemIcon(R.loot);
           const iy = GY - 14 - 9 * ease.back(clamp01(c / 0.5));
           s.img(ic, 75 - Math.round(ic.width / 2), iy);
-          if (c > 0.45) {
-            x.globalAlpha = clamp01((c - 0.45) / 0.15);
-            const w = Math.max(40, it.name.length * 3.2 + 8);
-            s.panel(92, iy - 3, w, 15, INK, rc);
-            s.text(it.name, 95, iy - 1.8, 5.5, '#fff2dc');
-            s.text(RARITY[it.rarity] + (R.rep.lootNote === 'duplicate' ? ' (dupe: +10 XP)' : ''), 95, iy + 4.6, 4.5, rc);
-            x.globalAlpha = 1;
-          }
+          if (c > 0.45)
+            lootTag = {
+              name: it.name,
+              note: RARITY[it.rarity] + (R.rep.lootNote === 'duplicate' ? ' (dupe: +10 XP)' : ''),
+              col: rc,
+              y: iy - 18,
+              alpha: clamp01((c - 0.45) / 0.15),
+            };
         }
         s.img(open ? co : cc, 68 + wx, open ? cy - 2 : cy);
       }
@@ -765,26 +779,42 @@ export function makeBattle(canvas: HTMLCanvasElement) {
       const p = { ...pose[k], stage: R.snaps[i].stage, phase: Math.floor(t * 5) % 2 };
       s.img(spr(R.gs[i], p), X[k] + dx[k], GY - 30 + dy[k], k === 'R');
     }
+    if (lootTag) {
+      // Centred above the chest (x = 75), clear of the HP bars.
+      const w = Math.round(Math.max(40, lootTag.name.length * 3.2 + 8, lootTag.note.length * 2.6 + 8));
+      x.globalAlpha = lootTag.alpha;
+      s.panel(75 - Math.round(w / 2), lootTag.y, w, 15, INK, lootTag.col);
+      s.text(lootTag.name, 75, lootTag.y + 1.2, 5.5, '#fff2dc', 'center');
+      s.text(lootTag.note, 75, lootTag.y + 7.6, 4.5, lootTag.col, 'center');
+      x.globalAlpha = 1;
+    }
     // HP with ghost bars
     for (const i of [0, 1]) {
       if (R.ghD[i] > 0) R.ghD[i] -= sdt;
       else R.gh[i] = Math.max(hp[i], R.gh[i] - 60 * sdt);
       if (R.gh[i] < hp[i]) R.gh[i] = hp[i];
     }
+    // HUD type grows on small canvases so names and narration stay at least 15 CSS px tall.
+    const k = Math.min(1.5, Math.max(1, 15 / (5.5 * (s.P / (window.devicePixelRatio || 1)))));
+    const hw = Math.round(Math.min(64 * k, 75)),
+      bh = Math.round(4 * k);
     const hud = (x0: number, i: number) => {
       const g = R.gs[i],
         max = R.res.maxHp[i];
-      s.panel(x0, 3, 64, 17, INK, '#4a3a6b');
-      s.text(g.name, x0 + 3, 4.5, 5.5, '#fff2dc');
-      s.text(`Lv ${R.snaps[i].level}`, x0 + 61, 5, 4.5, '#b9a8cf', 'right');
-      s.rect(x0 + 3, 14, 58, 4, '#0f0a17');
-      const w = Math.round((56 * R.gh[i]) / max),
-        f = Math.round((56 * hp[i]) / max);
-      s.rect(x0 + 4, 15, w, 2, '#fff2dc');
-      s.rect(x0 + 4, 15, f, 2, hp[i] / max > 0.5 ? '#6fdc9c' : hp[i] / max > 0.2 ? '#ffd166' : '#ff6f62');
+      const lv = `Lv ${R.snaps[i].level}`;
+      s.panel(x0, 3, hw, 11 * k + bh + 2, INK, '#4a3a6b');
+      s.text(s.fit(g.name, 5.5 * k, hw - 8 - s.measure(lv, 4.5 * k)), x0 + 3, 3 + 1.5 * k, 5.5 * k, '#fff2dc');
+      s.text(lv, x0 + hw - 3, 3 + 2 * k, 4.5 * k, '#b9a8cf', 'right');
+      const by = Math.round(3 + 11 * k),
+        bw = hw - 8;
+      s.rect(x0 + 3, by, hw - 6, bh, '#0f0a17');
+      const w = Math.round((bw * R.gh[i]) / max),
+        f = Math.round((bw * hp[i]) / max);
+      s.rect(x0 + 4, by + 1, w, bh - 2, '#fff2dc');
+      s.rect(x0 + 4, by + 1, f, bh - 2, hp[i] / max > 0.5 ? '#6fdc9c' : hp[i] / max > 0.2 ? '#ffd166' : '#ff6f62');
     };
     hud(3, R.L);
-    hud(93, R.Rr);
+    hud(157 - hw, R.Rr);
     for (const d of R.dmg) {
       const a = (t - d.t0) * R.speed;
       if (a > 1.1) continue;
@@ -799,8 +829,9 @@ export function makeBattle(canvas: HTMLCanvasElement) {
     }
     R.parts.step(sdt);
     R.parts.draw(s);
-    s.panel(3, 79, 154, 9, 'rgba(26,17,36,0.9)', '#4a3a6b');
-    s.text(msg.length > 46 ? `${msg.slice(0, 45)}…` : msg, 6, 80.2, 5.5, '#fff2dc');
+    const nh = Math.round(9 * k);
+    s.panel(3, 88 - nh, 154, nh, 'rgba(26,17,36,0.9)', '#4a3a6b');
+    s.text(s.fit(msg, 5.5 * k, 148), 6, 88 - nh + 1.2 * k, 5.5 * k, '#fff2dc');
     function spark(cx: number, cy: number, n: number) {
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + Math.random() * 0.3,
@@ -823,6 +854,8 @@ export function makeBattle(canvas: HTMLCanvasElement) {
 }
 
 /* ---------- evolution ---------- */
+// Build-up, reveal and bounce, then the old and new forms settle side by side with the stat gains
+// underneath. With reduced motion, the silhouettes crossfade once instead of flickering.
 export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: number, chips: [string, string][], onDone?: () => void) {
   const evo = new Stage(canvas, 96, 72, '#1c1530');
   const E = { parts: new Particles(), fired: {} as Record<string, number>, done: false, t0: evo.t };
@@ -848,18 +881,28 @@ export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: 
       }
     };
     s.rect(0, 0, 96, 72, '#1c1530');
-    for (let yy = 0; yy < 4; yy++) {
-      const w = 40 - Math.abs(1.5 - yy) * 8;
-      s.rect(48 - w / 2, 58 + yy, w, 1, yy === 0 ? '#4a3a6b' : '#33264c');
-    }
+    const floor = (cx: number, fy: number) => {
+      for (let yy = 0; yy < 4; yy++) {
+        const w = 40 - Math.abs(1.5 - yy) * 8;
+        s.rect(cx - w / 2, fy + yy, w, 1, yy === 0 ? '#4a3a6b' : '#33264c');
+      }
+    };
     const gx = 32,
       gy = 59 - 30;
+    // How far the ending has moved into its side-by-side layout (0 centred, 1 settled).
+    const k = T < 3.8 ? 0 : RM ? clamp01((T - 3.8 - 1.4) / 0.4) : ease.inOut(clamp01((T - 3.8 - 1.4) / 0.5));
+    if (!RM) floor(48 + 24 * k, 58 - 9 * k);
+    else if (k < 1) {
+      x.globalAlpha = 1 - k;
+      floor(48, 58);
+      x.globalAlpha = 1;
+    }
     if (T < 1.2) {
       s.img(spr(g, idlePose(g, t, { stage: from })), gx, gy);
       s.text(`${g.name} is evolving`, 48, 6, 6, '#fff2dc', 'center');
     } else if (T < 3.8) {
       const a = clamp01((T - 1.2) / 2.6);
-      if (Math.random() < 0.6)
+      if (Math.random() < (RM ? 0.15 : 0.6))
         E.parts.add({
           x: 30 + Math.random() * 36,
           y: 60,
@@ -871,10 +914,19 @@ export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: 
           fade: 0.6,
         });
       s.glow(48, 44, 14 + a * 20, bR[2], 0.35 + a * 0.4);
-      let idx = -1;
-      for (let i = 0; i < swaps.length; i++) if (T >= swaps[i]) idx = i;
-      const showNew = idx % 2 === 0;
-      s.img(spr(g, { stage: showNew ? to : from, sil: '#fff2dc', noItems: true }), gx, gy);
+      if (RM) {
+        const f = ease.inOut(clamp01((T - swaps[0]) / (3.8 - swaps[0])));
+        x.globalAlpha = 1 - f;
+        s.img(spr(g, { stage: from, sil: '#fff2dc', noItems: true }), gx, gy);
+        x.globalAlpha = f;
+        s.img(spr(g, { stage: to, sil: '#fff2dc', noItems: true }), gx, gy);
+        x.globalAlpha = 1;
+      } else {
+        let idx = -1;
+        for (let i = 0; i < swaps.length; i++) if (T >= swaps[i]) idx = i;
+        const showNew = idx % 2 === 0;
+        s.img(spr(g, { stage: showNew ? to : from, sil: '#fff2dc', noItems: true }), gx, gy);
+      }
       s.text(`${g.name} is evolving`, 48, 6, 6, '#fff2dc', 'center');
     } else {
       once('burst', () => {
@@ -895,26 +947,58 @@ export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: 
         }
       });
       const a = T - 3.8;
-      s.rays(48, 44, 70, t * 0.5, '#fff2dc', 0.1, 14);
-      s.glow(48, 44, 30, bR[3], 0.3);
+      s.rays(48 + 24 * k, 44 - 9 * k, 70, RM ? 0 : t * 0.5, '#fff2dc', 0.1, 14);
+      s.glow(48 + 24 * k, 44 - 9 * k, 30, bR[3], 0.3);
       let y = 0,
         pose: Pose;
-      if (a > 0.5 && a < 1.2) {
+      if (!RM && a > 0.5 && a < 1.2) {
         const ph = ((a - 0.5) / 0.35) % 1;
         y = -Math.round(Math.sin(ph * Math.PI) * 4);
         pose = { stage: to, eyes: 'happy', mouth: 'open', sq: ph < 0.12 || ph > 0.88 ? 1 : -1 };
       } else pose = idlePose(g, t, { stage: to });
       pose.phase = Math.floor(t * 5) % 2;
-      s.img(spr(g, pose), gx, gy + y);
-      chips.forEach(([txt, c], i) => {
-        const ca = a - 0.9 - i * 0.35;
+      if (RM) {
+        // Crossfade from the centred reveal to the side-by-side layout.
+        x.globalAlpha = 1 - k;
+        s.img(spr(g, pose), gx, gy);
+        x.globalAlpha = 1;
+      }
+      if (k > 0) {
+        // Old form on the left, an arrow, the new form on the right.
+        x.globalAlpha = k;
+        floor(24, 49);
+        if (RM) floor(72, 49);
+        s.img(spr(g, idlePose(g, t + 0.7, { stage: from })), 8, 20);
+        s.rect(43, 35, 6, 2, '#ffd166');
+        s.rect(49, 33, 1, 6, '#ffd166');
+        s.rect(50, 34, 1, 4, '#ffd166');
+        s.rect(51, 35, 1, 2, '#ffd166');
+        if (RM) s.img(spr(g, pose), 56, 20);
+        x.globalAlpha = 1;
+      }
+      if (!RM) s.img(spr(g, pose), gx + 24 * k, gy + y - 9 * k);
+      // Stat chips sit in rows under the two forms once they have settled.
+      let row = 0,
+        rowW = 0;
+      const laid = chips.map(([txt, c]) => {
+        const w = Math.round(s.measure(txt, 5) + 6);
+        if (rowW && rowW + 3 + w > 92) {
+          row++;
+          rowW = 0;
+        }
+        const at = { txt, c, w, row, x: rowW ? rowW + 3 : 0 };
+        rowW = at.x + w;
+        return at;
+      });
+      laid.forEach(({ txt, c, w, row: r, x: rx }, i) => {
+        const ca = a - 2 - i * 0.3;
         if (ca < 0) return;
-        const sc = ease.back(clamp01(ca / 0.3));
-        const w = txt.length * 2.9 + 6;
-        const cx0 = 48 - w / 2;
-        x.globalAlpha = clamp01(ca / 0.12);
-        s.panel(cx0, 4 + i * 9, w, 8, INK, c);
-        s.text(txt, 48, 4 + i * 9 + 1.2, 5 * Math.max(0.6, sc), c, 'center');
+        const last = laid.filter((l) => l.row === r).pop()!;
+        const cx0 = Math.round(48 - (last.x + last.w) / 2 + rx);
+        const sc = RM ? 1 : ease.back(clamp01(ca / 0.3));
+        x.globalAlpha = clamp01(ca / (RM ? 0.3 : 0.12));
+        s.panel(cx0, 55 + r * 9, w, 8, INK, c);
+        s.text(txt, cx0 + w / 2, 55 + r * 9 + 1.2, 5 * Math.max(0.6, sc), c, 'center');
         x.globalAlpha = 1;
       });
       if (a < 0.5) s.fadeAll('#fff6e6', RM ? 0 : 1 - a / 0.5);
