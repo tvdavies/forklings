@@ -193,18 +193,29 @@
 
   <section class="view" id="v-api" hidden>
     <h2>Connect your tools</h2>
-    <p class="dim">Look after your Forkling from Claude Code, Pi, Codex or any MCP client. Create a personal token here; revoke it any time and it stops working at once.</p>
-    <div class="panel">
-      <form class="row" id="tokenForm"><input class="handle wide" id="tokenName" aria-label="Token name" placeholder="Token name, e.g. laptop" maxlength="40"><button class="btn" type="submit">Create token</button></form>
-      <p class="tokenout" id="tokenOut" hidden></p>
-      <ul class="log" id="tokenList"></ul>
-    </div>
+    <p class="dim">Look after your Forkling from Claude Code, Codex, Pi or any MCP client. Add the server, sign in with GitHub in the browser when your tool asks, and choose what it may do. No token to paste.</p>
     <h3 class="sub">Claude Code</h3>
     <pre class="term">/plugin marketplace add tvdavies/forklings
 /plugin install forklings@forklings
-# paste your token when asked, then try /forklings:forkling</pre>
-    <h3 class="sub">Any MCP client</h3>
-    <p class="small dim">Streamable HTTP at <code>https://forklings.dev/mcp</code> with the header <code>Authorization: Bearer fk_…</code>.</p>
+/mcp    # pick forklings, then Authenticate</pre>
+    <h3 class="sub">Codex</h3>
+    <pre class="term">codex mcp add forklings --url https://forklings.dev/mcp
+codex mcp login forklings</pre>
+    <h3 class="sub">Pi</h3>
+    <pre class="term">pi mcp add forklings --url https://forklings.dev/mcp
+pi mcp login forklings</pre>
+    <p class="small dim">Any other MCP client: Streamable HTTP at <code>https://forklings.dev/mcp</code>, with OAuth discovery from the server's <code>401</code>.</p>
+    <h3 class="sub">Connected apps</h3>
+    <div class="panel">
+      <ul class="log" id="connList"></ul>
+    </div>
+    <h3 class="sub">Personal tokens</h3>
+    <p class="small dim">For scripts, CI and the status line, where nobody can sign in in a browser. A personal token can do everything a connected app can, so keep it secret. Send it as <code>Authorization: Bearer fk_…</code> to <code>/mcp</code> or the JSON API. Revoke it any time and it stops working at once.</p>
+    <div class="panel">
+      <form class="row" id="tokenForm"><input class="handle wide" id="tokenName" aria-label="Token name" placeholder="Token name, e.g. status line" maxlength="40"><button class="btn" type="submit">Create token</button></form>
+      <p class="tokenout" id="tokenOut" hidden></p>
+      <ul class="log" id="tokenList"></ul>
+    </div>
     <h3 class="sub">JSON API</h3>
     <pre class="term" id="apiDocs">GET  /api/me                 your Forkling, needs and wardrobe
 POST /api/care      {"action":"feed"|"play"|"pat"|"nap"}

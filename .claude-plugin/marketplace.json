@@ -8,7 +8,7 @@
     {
       "name": "forklings",
       "source": "./plugins/forklings",
-      "description": "Check on, care for and coach your Forkling from Claude Code"
+      "description": "Check on, care for and coach your Forkling from Claude Code. Sign in with GitHub; no token to paste."
     }
   ]
 }
