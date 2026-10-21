@@ -72,10 +72,11 @@
 
   <section class="view" id="v-hatch" hidden>
     <div class="hatch-wrap">
-      <h2>An egg, just for you</h2>
-      <p class="dim">Its seed comes from your handle, this exact second and a secret salt, so nobody can predict a hatch.</p>
+      <div class="hatch-head"><h2 id="hatchTitle">An egg, just for you</h2><button class="info" id="hatchInfo" type="button" aria-expanded="false" aria-controls="hatchWhy" aria-label="How hatching works">i</button></div>
+      <p class="dim" id="hatchWhy" hidden>Its seed comes from your handle, this exact second and a secret salt, so nobody can predict a hatch.</p>
       <div class="stage ar43"><canvas id="hatchCanvas" aria-label="Your egg"></canvas><div class="card" id="hatchCard" aria-live="polite"></div></div>
-      <div class="actions"><button class="btn" id="hatchBtn" type="button">Hatch</button><button class="btn" id="meetBtn" type="button" hidden>Take it home</button></div>
+      <div class="actions"><button class="btn" id="hatchBtn" type="button">Hatch</button><button class="btn" id="meetBtn" type="button" hidden>Take it home</button><button class="btn ghost" id="copyPic" type="button" hidden>Copy picture</button></div>
+      <p class="toastline" id="hatchMsg" aria-live="polite"></p>
     </div>
   </section>
 
@@ -241,7 +242,7 @@ GET  /api/leaderboard          ranked players, NPCs, practice bracket and your p
   <div class="evo-box" id="evoBox" tabindex="-1">
     <div class="stage ar43"><canvas id="evoCanvas" aria-hidden="true"></canvas></div>
     <p class="sr-only" id="evoMsg" aria-live="polite"></p>
-    <button class="btn" id="evoDone" type="button" hidden>Wonderful</button>
+    <button class="btn" id="evoDone" type="button" hidden>Show me</button>
   </div>
 </div>
 
