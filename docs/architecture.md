@@ -24,6 +24,8 @@ MCP clients ────┘  /api /auth /mcp    │    script, battle log, repla
 | `src/shared/strategy.ts` | The strategy AST and its fuel-limited interpreter |
 | `src/shared/script.ts` | Tokeniser and parser for strategy scripts |
 | `src/shared/battle.ts` | The battle simulation, held-item effects and per-turn summaries |
+| `src/shared/economy.ts` | Bits: prices, level locks, rewards, the classics and NPC shopping |
+| `src/shared/shopgen.ts`, `distinct.ts` | The nightly item generator and the distinctness test it applies |
 | `src/shared/npcs.ts`, `bots.ts` | The house NPC roster and the fallback bots |
 | `src/worker/` | HTTP routing, auth, the two Durable Objects, the MCP server and the cron |
 | `src/client/` | The web app: canvas renderer, scenes (room, hatch, battle, evolution) and UI |
@@ -47,7 +49,11 @@ A battle is `simulate(seed, snapshotA, snapshotB)`. Snapshots carry stats, gear 
 
 **Ranked play** needs a verified GitHub identity whose account is at least 30 days old (`gh_created_at`, captured at sign-in). Both sides must be eligible for a ranked match. NPCs count as eligible, so the ladder has opponents from day one. Demo and newer accounts fight NPCs and bots without a rating, and the leaderboard lists them separately.
 
-**Held items** are the only gear that affects battles: one slot, at most +6% to one stat. Head, face and neck items are cosmetic.
+**Held items** are the only gear that affects battles: one slot, at most +6% to one stat. Head, face, neck and body items are cosmetic. Generated items carry their definition in the snapshot, so a replay draws them and applies their effect exactly as on the day.
+
+## Bits and the shop
+
+Each `PlayerDO` keeps its bits in an append-only ledger in its own SQLite. Every entry has a unique key, so a retried battle, care action or purchase pays or charges once. A purchase debits and grants the item in one transaction. D1 gets a copy of each entry in `bits_events` for analytics. Shop items are generated nightly from the day and a secret salt: by the `5 0 * * *` cron, or by the first shop request if the cron hasn't run. They are stored in `shop_items` and `shop_days`. The numbers, the generator and its measured cost are in [economy.md](economy.md).
 
 ### Balancing queries
 
@@ -86,4 +92,4 @@ Coaching tactics and [strategy scripts](strategy-scripts.md) both compile to the
 
 ## Costs
 
-Every request runs on the Workers plan the account already has. D1 rows are small, and reads stay within the included quota at hobby scale. An idle player does no work at all. The cron does a bounded amount of NPC work every 20 minutes.
+Every request runs on the Workers plan the account already has. D1 rows are small, and reads stay within the included quota at hobby scale. An idle player does no work at all. The cron does a bounded amount of NPC work every 20 minutes. Making a night's shop items takes tens of milliseconds of CPU in the first months, and about a quarter of a second after a year. That needs the Workers Paid plan's CPU allowance, not the Free plan's 10 ms (see [economy.md](economy.md#capacity-and-cpu)).

@@ -108,9 +108,9 @@ describe('a day of play', () => {
     expect(day(REWARDS.fullBattlesPerDay + 1, REWARDS.fullBattlesPerDay + 1, false) - full).toBe(REWARDS.taperedWin);
     expect(day(REWARDS.fullBattlesPerDay + 1, REWARDS.fullBattlesPerDay, false) - full).toBe(0);
   });
-  test('an Epic item takes real play: more than a week for a casual player', () => {
-    expect(PRICE[3] / casual).toBeGreaterThan(3);
-    expect(basePrice(3, 'held') / casual).toBeGreaterThan(4);
+  test('an Epic item takes real play: more than four days for a casual player, five for a held one', () => {
+    expect(PRICE[3] / casual).toBeGreaterThan(4);
+    expect(basePrice(3, 'held') / casual).toBeGreaterThan(5);
   });
   test('levels and evolutions pay a little, never enough to farm', () => {
     let toTen = 0;

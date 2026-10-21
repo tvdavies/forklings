@@ -720,6 +720,8 @@ export interface Existing {
   look: Look;
   /** The day it was made; absent for the classics, which always count as recent. */
   day?: string;
+  /** Its shop name. Two recent items may not share one, however different they look. */
+  name?: string;
 }
 export interface Rejection {
   slot: Slot;
@@ -731,8 +733,9 @@ export interface Rejection {
 /**
  * Generate a night's items. Each candidate is drawn on the mannequin and compared with
  * existing items in its slot (and tonight's earlier picks): recent ones and the classics at
- * the strict threshold, older ones at the floor. Near-duplicates are rejected and another
- * candidate is drawn from the same seeded stream; a slot that finds nothing is skipped.
+ * the strict threshold, older ones at the floor. A recent item's name can't be reused either
+ * (two "Cocoa tutu"s in a week read as the same thing). Near-duplicates are rejected and
+ * another candidate is drawn from the same seeded stream; a slot that finds nothing is skipped.
  */
 export function generateDay(seed: number, day: string, existing: Existing[]): { items: GenItem[]; rejected: Rejection[] } {
   const r = mulberry(seed ^ 0x5409);
@@ -743,9 +746,11 @@ export function generateDay(seed: number, day: string, existing: Existing[]): { 
   const bySlot = (): Record<Slot, Entry[]> => ({ head: [], face: [], neck: [], body: [], held: [] });
   const pool = bySlot(),
     old = bySlot();
+  const recentNames = new Map<string, string>();
   for (const e of existing) {
     const recent = !e.day || Date.parse(`${e.day}T00:00:00Z`) >= since;
     (recent ? pool : old)[e.slot].push(e);
+    if (recent && e.name) recentNames.set(e.name.toLowerCase(), e.id);
   }
   const usedArch = new Set<string>();
   slotsFor(r).forEach((slot, i) => {
@@ -754,6 +759,11 @@ export function generateDay(seed: number, day: string, existing: Existing[]): { 
       def.day = day;
       const look = lookOf(def);
       if (!look.w) continue;
+      const sameName = recentNames.get(def.name.toLowerCase());
+      if (sameName) {
+        rejected.push({ slot, name: def.name, nearest: sameName, distance: 0 });
+        continue;
+      }
       const near = nearDuplicate(look, pool[slot], MIN_ITEM_DISTANCE) ?? nearDuplicate(look, old[slot], MIN_DISTANCE_EVER);
       if (near) {
         rejected.push({ slot, name: def.name, nearest: near.id, distance: near.distance.pixel });
@@ -765,6 +775,7 @@ export function generateDay(seed: number, day: string, existing: Existing[]): { 
       const price = basePrice(def.rarity, slot) + 5 * Math.floor(r() * 3);
       items.push({ id, day, arch: arch.id, def, level, price });
       pool[slot].push({ id, look });
+      recentNames.set(def.name.toLowerCase(), id);
       usedArch.add(arch.id);
       break;
     }

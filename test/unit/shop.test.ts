@@ -31,7 +31,8 @@ import {
 const SALT = 'unit-test-salt';
 const DAYS = 21;
 const D0 = Date.UTC(2026, 9, 21);
-const classics = (): Existing[] => Object.keys(CLASSICS).map((id) => ({ id, slot: ITEMS[id].slot, look: lookOf(ITEMS[id]) }));
+const classics = (): Existing[] =>
+  Object.keys(CLASSICS).map((id) => ({ id, slot: ITEMS[id].slot, look: lookOf(ITEMS[id]), name: ITEMS[id].name }));
 
 /** Three weeks of nights, generated the way the Worker does: each night sees every earlier item and the classics. */
 const run: { day: string; items: GenItem[] }[] = [];
@@ -43,7 +44,7 @@ beforeAll(async () => {
     const { items } = generateDay(await shopSeed(day, SALT), day, existing);
     run.push({ day, items });
     for (const it of items) {
-      const e = { id: it.id, slot: it.def.slot, look: lookOf(it.def), day };
+      const e = { id: it.id, slot: it.def.slot, look: lookOf(it.def), day, name: it.def.name };
       existing.push(e);
       made.push(e);
     }
@@ -103,6 +104,14 @@ describe('distinctness', () => {
         const recent = [...classics().filter((e) => e.slot === it.def.slot), ...before.filter((e) => e.day! >= since)];
         expect(nearDuplicate(look, recent, MIN_ITEM_DISTANCE)).toBeNull();
         expect(nearDuplicate(look, before, MIN_DISTANCE_EVER)).toBeNull();
+      }
+  });
+  test(`no two items in ${RECENT_DAYS} days share a name, and none takes a classic's`, () => {
+    const named = [...classics(), ...made];
+    for (const [i, a] of named.entries())
+      for (const b of named.slice(i + 1)) {
+        const apart = a.day && b.day ? Math.abs(Date.parse(a.day) - Date.parse(b.day)) / 86400e3 : 0;
+        if (apart < RECENT_DAYS) expect(`${b.id} ${b.name}`.toLowerCase()).not.toBe(`${b.id} ${a.name}`.toLowerCase());
       }
   });
   test('an exact copy of an existing item is refused', () => {

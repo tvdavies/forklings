@@ -24,7 +24,7 @@ export const ROLLOVER_GRACE_MS = 10 * 60 * 1000;
 
 type ShelfEntry = { id: string; tag: 'new' | 'back' };
 type DayRow = { day: string; items: string; made: number; rejected: number; short: number; ms: number };
-type CatalogueRow = { id: string; slot: Slot; day: string; look: string };
+type CatalogueRow = { id: string; slot: Slot; day: string; look: string; def: string };
 type ItemRow = { id: string; day: string; level: number; price: number; def: string };
 
 export interface ShopDay {
@@ -58,7 +58,7 @@ async function readDay(env: Env, day: string): Promise<ShopDay | null> {
 let classicLooks: Existing[] | null = null;
 /** The classics count as existing items: nothing generated may look like them either. */
 function classics(): Existing[] {
-  classicLooks ??= Object.keys(CLASSICS).map((id) => ({ id, slot: ITEMS[id].slot, look: lookOf(ITEMS[id]) }));
+  classicLooks ??= Object.keys(CLASSICS).map((id) => ({ id, slot: ITEMS[id].slot, look: lookOf(ITEMS[id]), name: ITEMS[id].name }));
   return classicLooks;
 }
 
@@ -67,8 +67,12 @@ export async function ensureShopDay(env: Env, day: string, now = Date.now()): Pr
   const have = await readDay(env, day);
   if (have) return have;
   const t0 = Date.now();
-  const rows = (await env.DB.prepare('SELECT id, slot, day, look FROM shop_items WHERE day < ?').bind(day).all<CatalogueRow>()).results;
-  const existing: Existing[] = [...classics(), ...rows.map((r) => ({ id: r.id, slot: r.slot, day: r.day, look: decodeLook(r.look) }))];
+  const rows = (await env.DB.prepare('SELECT id, slot, day, look, def FROM shop_items WHERE day < ?').bind(day).all<CatalogueRow>())
+    .results;
+  const existing: Existing[] = [
+    ...classics(),
+    ...rows.map((r) => ({ id: r.id, slot: r.slot, day: r.day, look: decodeLook(r.look), name: loadDef(r.def).name })),
+  ];
   const seed = await shopSeed(day, await shopSalt(env));
   const { items, rejected } = generateDay(seed, day, existing);
   const short = Math.max(0, 6 - items.length);

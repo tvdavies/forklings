@@ -237,6 +237,9 @@ export class PlayerDO extends DurableObject<Env> {
         ),
       );
     } catch (e) {
+      // Keep them for the next copy (INSERT OR IGNORE makes a repeat harmless). Lost only if the
+      // object is evicted first; the ledger itself is unaffected.
+      this.wallet.pending.unshift(...rows);
       console.error('bits mirror failed', who.pid, String(e));
     }
   }

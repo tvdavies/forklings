@@ -61,7 +61,15 @@ export function colourDistance(a: string, b: string): number {
   return d;
 }
 
-const filled = (l: Look) => l.cols.reduce((n, c) => n + (c ? 1 : 0), 0);
+const filledCache = new WeakMap<Look, number>();
+const filled = (l: Look) => {
+  let n = filledCache.get(l);
+  if (n === undefined) {
+    n = l.cols.reduce((k, c) => k + (c ? 1 : 0), 0);
+    filledCache.set(l, n);
+  }
+  return n;
+};
 
 export interface Distance {
   /**
@@ -77,8 +85,19 @@ export interface Distance {
 
 /** Compare two looks, centred on each other and nudged up to a pixel each way to find the best match. */
 export function lookDistance(a: Look, b: Look): Distance {
-  let best: Distance = { pixel: 1, silhouette: 1, palette: paletteDistance(a, b) };
+  return { ...overlap(a, b), palette: paletteDistance(a, b) };
+}
+
+/**
+ * The pixel and silhouette parts of the distance: all the generator needs to decide. With
+ * `stop`, an alignment is abandoned as soon as its distance provably reaches `stop` (or the best
+ * so far): the union is at most both looks' filled pixels, so cost / (na + nb) is a lower bound.
+ * Distances under `stop` come out exactly as without it.
+ */
+function overlap(a: Look, b: Look, stop = 1): Omit<Distance, 'palette'> {
+  let best = { pixel: 1, silhouette: 1 };
   if (!a.w || !b.w) return best;
+  const most = filled(a) + filled(b);
   const ax = 0,
     ay = 0,
     bx0 = Math.round((a.w - b.w) / 2),
@@ -93,8 +112,10 @@ export function lookDistance(a: Look, b: Look): Distance {
         y1 = Math.max(ay + a.h, by + b.h);
       let union = 0,
         inter = 0,
-        cost = 0;
-      for (let y = y0; y < y1; y++)
+        cost = 0,
+        gaveUp = false;
+      const limit = Math.min(stop, best.pixel) * most;
+      for (let y = y0; y < y1 && !gaveUp; y++) {
         for (let x = x0; x < x1; x++) {
           const ca = x >= ax && x < ax + a.w && y >= ay && y < ay + a.h ? a.cols[(y - ay) * a.w + (x - ax)] : null;
           const cb = x >= bx && x < bx + b.w && y >= by && y < by + b.h ? b.cols[(y - by) * b.w + (x - bx)] : null;
@@ -106,8 +127,11 @@ export function lookDistance(a: Look, b: Look): Distance {
             cost += colourDistance(ca, cb);
           } else cost += 1;
         }
+        gaveUp = cost >= limit;
+      }
+      if (gaveUp) continue;
       const pixel = union ? cost / union : 0;
-      if (pixel < best.pixel) best = { pixel, silhouette: union ? 1 - inter / union : 0, palette: best.palette };
+      if (pixel < best.pixel) best = { pixel, silhouette: union ? 1 - inter / union : 0 };
     }
   return best;
 }
@@ -150,14 +174,14 @@ export interface Neighbour {
  */
 export function nearDuplicate(candidate: Look, existing: Iterable<{ id: string; look: Look }>, min = MIN_ITEM_DISTANCE): Neighbour | null {
   const n = filled(candidate);
-  let nearest: Neighbour | null = null;
+  let nearest: { id: string; look: Look; d: Omit<Distance, 'palette'> } | null = null;
   for (const e of existing) {
     const m = filled(e.look);
     if (Math.abs(n - m) / Math.max(n, m, 1) >= min) continue;
-    const d = lookDistance(candidate, e.look);
-    if (d.pixel < min && (!nearest || d.pixel < nearest.distance.pixel)) nearest = { id: e.id, distance: d };
+    const d = overlap(candidate, e.look, Math.min(min, nearest?.d.pixel ?? 1));
+    if (d.pixel < min && (!nearest || d.pixel < nearest.d.pixel)) nearest = { id: e.id, look: e.look, d };
   }
-  return nearest;
+  return nearest && { id: nearest.id, distance: { ...nearest.d, palette: paletteDistance(candidate, nearest.look) } };
 }
 
 /** Compact signature for storage: width, height, palette and one palette index per pixel. */

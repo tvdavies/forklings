@@ -543,10 +543,10 @@ function renderPick() {
     const label = SHOP.busy
       ? 'Buying…'
       : !chk.ok && chk.code === 'locked'
-        ? `Level ${offer.level} needed`
+        ? `Level <span class="num">${offer.level}</span> needed`
         : confirming
-          ? `Tap again to pay ${offer.price}`
-          : `Buy for ${offer.price}`;
+          ? `Tap again to pay <span class="num">${offer.price}</span>`
+          : `Buy for <span class="num">${offer.price}</span>`;
     action = `<button class="btn${confirming ? ' confirm' : ''}" type="button" data-act="buy"${chk.ok && !SHOP.busy ? '' : ' disabled'}>${label}</button>`;
     if (!chk.ok) why = `<p class="why ${chk.code}">${esc(chk.error)}</p>`;
   }
