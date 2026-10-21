@@ -7,9 +7,8 @@ import { sha256Hex } from '../../src/shared/rng';
 import { levelForXp, stageForXp } from '../../src/shared/state';
 
 const player = async (name: string, xp: number): Promise<Snapshot> => ({
-  pid: `demo:${name}`,
+  pid: `gh:${name}`,
   handle: name,
-  verified: false,
   bot: false,
   seed: await sha256Hex(`creature|${name}`),
   stage: stageForXp(xp),
@@ -25,7 +24,6 @@ const npcPool = async (): Promise<Snapshot[]> =>
     NPC_ROSTER.map(async (n) => ({
       pid: npcPid(n.handle),
       handle: n.handle,
-      verified: false,
       bot: false,
       seed: await sha256Hex(`creature|${n.handle}`),
       stage: stageForXp(n.xp),

@@ -4,11 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Forklings</title>
-<meta name="description" content="A pocket pet for developers. Raise it, dress it, coach it, and it battles on its own.">
+<meta name="description" content="A tiny pixel pet for developers. Hatch one, look after it, coach it, and let it battle while you code.">
 <meta name="theme-color" content="#271d3b">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" href="/icon-192.png" type="image/png">
-<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="/favicon-16.png" type="image/png" sizes="16x16">
+<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="/favicon-48.png" type="image/png" sizes="48x48">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -43,39 +46,35 @@
 </head>
 <body>
 <header class="top" id="top" hidden>
-  <a class="brand" href="#home">Forklings</a>
-  <div class="who"><span id="whoHandle"></span> <span class="badge" id="whoBadge"></span>
-    <button class="link" id="logoutBtn" type="button">Log out</button></div>
+  <a class="brand" href="#home"><img src="/favicon-32.png" width="32" height="32" alt="">Forklings</a>
+  <div class="who"><span id="whoHandle"></span>
+    <button class="link" id="logoutBtn" type="button">Sign out</button></div>
 </header>
 
 <main id="app">
   <section class="view" id="v-login" hidden>
-    <div class="login">
-      <h1 class="wordmark">Forklings</h1>
-      <p class="tag">A pocket pet for developers. Raise it, dress it, coach it, and it battles on its own.</p>
-      <div class="panel login-box">
-        <button class="btn" id="ghBtn" type="button">Log in with GitHub</button>
-        <p class="small dim" id="ghNote">GitHub is used for your name only. Forklings never reads your repos or activity.</p>
-        <hr>
-        <form id="demoForm" autocomplete="off">
-          <label for="demoHandle" class="lbl">Demo login <span class="badge warn">unverified</span></label>
-          <p class="small dim">Pick any handle to play now. It isn't checked against GitHub, it's marked unverified on the leaderboard, and the pet lives in this browser's session.</p>
-          <div class="row">
-            <input class="handle" id="demoHandle" name="handle" placeholder="your-handle" maxlength="39" spellcheck="false" autocapitalize="off" required>
-            <button class="btn ghost" type="submit">Play demo</button>
-          </div>
-          <p class="err" id="demoErr" role="alert"></p>
-        </form>
+    <div class="signin">
+      <div class="signin-title">
+        <h1 class="wordmark">Forklings</h1>
+        <p class="pitch">A tiny pixel pet that battles while you code.</p>
+      </div>
+      <div class="stage signin-scene"><canvas id="meadowCanvas" role="img" aria-label="Three Forklings pottering about in a moonlit meadow"></canvas></div>
+      <div class="signin-cta">
+        <p class="signin-msg" id="signinMsg" role="alert" hidden></p>
+        <a class="btn gh" id="ghBtn" href="/auth/github"><svg viewBox="0 0 16 16" width="22" height="22" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Sign in with GitHub</a>
+        <p class="identity">GitHub only tells Forklings who you are: your username and when your account was made. Forklings never sees your code, repos or activity, and never posts anything for you.</p>
+        <p class="small dim">New here? Signing in gives you an egg to hatch.</p>
       </div>
     </div>
   </section>
 
   <section class="view" id="v-hatch" hidden>
     <div class="hatch-wrap">
-      <h2>An egg, just for you</h2>
-      <p class="dim">Its seed comes from your handle, this exact second and a secret salt, so nobody can predict a hatch.</p>
+      <div class="hatch-head"><h2 id="hatchTitle">An egg, just for you</h2><button class="info" id="hatchInfo" type="button" aria-expanded="false" aria-controls="hatchWhy" aria-label="How hatching works">i</button></div>
+      <p class="dim" id="hatchWhy" hidden>Its seed comes from your handle, this exact second and a secret salt, so nobody can predict a hatch.</p>
       <div class="stage ar43"><canvas id="hatchCanvas" aria-label="Your egg"></canvas><div class="card" id="hatchCard" aria-live="polite"></div></div>
-      <div class="actions"><button class="btn" id="hatchBtn" type="button">Hatch</button><button class="btn" id="meetBtn" type="button" hidden>Take it home</button></div>
+      <div class="actions"><button class="btn" id="hatchBtn" type="button">Hatch</button><button class="btn" id="meetBtn" type="button" hidden>Take it home</button><button class="btn ghost" id="copyPic" type="button" hidden>Copy picture</button></div>
+      <p class="toastline" id="hatchMsg" aria-live="polite"></p>
     </div>
   </section>
 
@@ -178,7 +177,7 @@
     <details class="fold rules">
       <summary class="lbl">How rating works</summary>
       <p class="dim small">Ranked play is for GitHub accounts at least 30 days old, and for the house NPCs. Everyone starts at 1000. Ratings move fully in battles between ranked players and NPCs, and only a little against house bots. NPCs start at a set rating, so one can sit high before it has won anything.</p>
-      <p class="dim small">Demo players and newer GitHub accounts play in the practice bracket. They battle NPCs and house bots without a rating, so that list goes by wins.</p>
+      <p class="dim small">GitHub accounts less than 30 days old play in the practice bracket. They battle NPCs and house bots without a rating, so that list goes by wins.</p>
     </details>
     <h3 class="sub">Ranked players</h3>
     <ol class="ranks" id="ranks"></ol>
@@ -242,7 +241,7 @@ GET  /api/leaderboard          ranked players, NPCs, practice bracket and your p
   <div class="evo-box" id="evoBox" tabindex="-1">
     <div class="stage ar43"><canvas id="evoCanvas" aria-hidden="true"></canvas></div>
     <p class="sr-only" id="evoMsg" aria-live="polite"></p>
-    <button class="btn" id="evoDone" type="button" hidden>Wonderful</button>
+    <button class="btn" id="evoDone" type="button" hidden>Show me</button>
   </div>
 </div>
 

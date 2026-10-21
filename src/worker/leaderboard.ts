@@ -4,7 +4,6 @@
 /** One public leaderboard row. No pid: the leaderboard only ever shows handles. */
 export interface LeaderRow {
   handle: string;
-  verified: number;
   npc: number;
   persona: string | null;
   name: string;
@@ -20,19 +19,17 @@ export interface LeaderRow {
 
 /**
  * The viewer's own row. A ranked player gets their place among ranked players (NPCs
- * aside) and how many there are. Anyone else is in the practice bracket: `reason` says
- * why (`github`: a demo login, `age`: a GitHub account under the minimum age), and
- * `rankedAt` says when ranked play opens, if we know the account's age.
+ * aside) and how many there are. A GitHub account under the minimum age is in the
+ * practice bracket, and `rankedAt` says when ranked play opens, if we know the account's age.
  */
-export type MyPlace = LeaderRow &
-  ({ ranked: true; rank: number; of: number } | { ranked: false; reason: 'github' | 'age'; rankedAt: number | null });
+export type MyPlace = LeaderRow & ({ ranked: true; rank: number; of: number } | { ranked: false; rankedAt: number | null });
 
 export interface Leaderboard {
   /** Ranked players, NPCs aside, best first. */
   players: LeaderRow[];
   /** House NPCs, best first. They share the ranked ladder but are listed apart. */
   npcs: LeaderRow[];
-  /** The practice bracket: demo players and newer GitHub accounts, by wins. */
+  /** The practice bracket: GitHub accounts under the minimum age, by wins. */
   unranked: LeaderRow[];
   me: MyPlace | null;
 }
@@ -40,7 +37,10 @@ export interface Leaderboard {
 export interface LeaderboardQuery {
   /** SQL condition for "may play ranked", with one `?` parameter: the account-age cutoff. */
   rankedSql: string;
-  /** SQL condition for the rows the leaderboard may show (NPCs only while they're on). */
+  /**
+   * SQL condition for the rows the leaderboard may show: GitHub players, and NPCs only while
+   * they're on. Rows left over from the retired demo sign-in are never shown.
+   */
   visibleSql: string;
   minAccountAgeMs: number;
   now: number;
@@ -49,7 +49,7 @@ export interface LeaderboardQuery {
 }
 
 export const LEADERBOARD_LIMIT = 50;
-const COLS = 'handle, verified, npc, persona, name, seed, level, stage, rating, wins, losses, draws, xp';
+const COLS = 'handle, npc, persona, name, seed, level, stage, rating, wins, losses, draws, xp';
 // pid breaks the last ties, so a list's order and the viewer's rank always agree.
 const RANKED_ORDER = 'ORDER BY rating DESC, wins DESC, xp DESC, pid';
 
@@ -66,26 +66,31 @@ export async function leaderboard(db: D1Database, q: LeaderboardQuery): Promise<
       .all<LeaderRow>()
       .then((r) => r.results || []);
   const [players, npcs, unranked, me] = await Promise.all([
-    list(`npc = 0 AND ${ranked}`, RANKED_ORDER),
+    list(`npc = 0 AND ${q.visibleSql} AND ${ranked}`, RANKED_ORDER),
     list(`npc = 1 AND ${q.visibleSql} AND ${ranked}`, RANKED_ORDER),
     list(`${q.visibleSql} AND NOT ${ranked}`, 'ORDER BY wins DESC, xp DESC, pid'),
-    q.pid ? myPlace(db, q.pid, ranked, cutoff, q.minAccountAgeMs) : null,
+    q.pid ? myPlace(db, q.pid, q.visibleSql, ranked, cutoff, q.minAccountAgeMs) : null,
   ]);
   return { players, npcs, unranked, me };
 }
 
-async function myPlace(db: D1Database, pid: string, ranked: string, cutoff: number, minAgeMs: number): Promise<MyPlace | null> {
+async function myPlace(
+  db: D1Database,
+  pid: string,
+  visible: string,
+  ranked: string,
+  cutoff: number,
+  minAgeMs: number,
+): Promise<MyPlace | null> {
   const row = await db
-    .prepare(`SELECT ${COLS}, pid, gh_created_at, ${ranked} AS ranked FROM players WHERE pid = ?2 AND has_creature = 1 AND npc = 0`)
+    .prepare(
+      `SELECT ${COLS}, pid, gh_created_at, ${ranked} AS ranked FROM players WHERE pid = ?2 AND has_creature = 1 AND npc = 0 AND ${visible}`,
+    )
     .bind(cutoff, pid)
     .first<MeRow>();
   if (!row) return null;
   const { pid: _pid, gh_created_at, ranked: isRanked, ...pub } = row;
-  if (!isRanked) {
-    return pub.verified
-      ? { ...pub, ranked: false, reason: 'age', rankedAt: gh_created_at === null ? null : gh_created_at + minAgeMs }
-      : { ...pub, ranked: false, reason: 'github', rankedAt: null };
-  }
+  if (!isRanked) return { ...pub, ranked: false, rankedAt: gh_created_at === null ? null : gh_created_at + minAgeMs };
   // Ranked players ahead of this one, in the same order as the ranked list.
   const place = await db
     .prepare(

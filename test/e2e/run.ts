@@ -1,12 +1,16 @@
-// End-to-end check of the deployed game in a real browser, at desktop and phone sizes.
-// It signs up one demo player, so it counts against the five demo sign-ups per network
-// per day. Screenshots go to test/e2e/out/.
+// End-to-end check of the game in a real browser, at desktop and phone sizes.
+// Screenshots go to test/e2e/out/.
 //
-//   CHROMIUM=/usr/bin/chromium bun test/e2e/run.ts [https://forklings.dev]
+// Signed out, it checks the GitHub sign-in page and its error messages. Signing in needs
+// GitHub, so the rest runs only when you pass a session: copy the value of the fk_session
+// cookie from a browser signed in to the same server.
+//
+//   CHROMIUM=/usr/bin/chromium FORKLINGS_SESSION=<fk_session> bun test/e2e/run.ts [https://forklings.dev]
 import { mkdirSync } from 'node:fs';
 import { type BrowserContext, chromium, type Page } from 'playwright-core';
 
 const BASE = process.argv[2] ?? 'https://forklings.dev';
+const SESSION = process.env.FORKLINGS_SESSION ?? '';
 const OUT = 'test/e2e/out';
 mkdirSync(OUT, { recursive: true });
 
@@ -23,7 +27,11 @@ async function step(name: string, fn: () => Promise<void>) {
 function expect(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg);
 }
-const shot = (p: Page, name: string) => p.screenshot({ path: `${OUT}/${name}.png` });
+// Wait out the 0.25 s view fade so screenshots aren't half-faded.
+const shot = async (p: Page, name: string) => {
+  await p.waitForTimeout(300);
+  await p.screenshot({ path: `${OUT}/${name}.png` });
+};
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium' });
 const errors: string[] = [];
@@ -31,6 +39,10 @@ const watch = (p: Page) => {
   p.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   // HTTP error statuses (401 before login, 409 for a rejected script) are expected; only count real errors.
   p.on('console', (m) => m.type() === 'error' && !m.text().startsWith('Failed to load resource') && errors.push(`console: ${m.text()}`));
+};
+const noSidewaysScroll = async (pg: Page) => {
+  const overflow = await pg.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow <= 1, `page is ${overflow}px wider than the screen`);
 };
 
 // ---------- boot, with /api slow and then unreachable ----------
@@ -76,28 +88,114 @@ await step('Try again recovers once /api is back, without reloading the page', a
 });
 await offline.close();
 
-// ---------- desktop ----------
-const desktop: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 });
-const p = await desktop.newPage();
-watch(p);
-const handle = `e2e-${Math.random().toString(36).slice(2, 8)}`;
+// ---------- signed out ----------
+const guest = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 });
+const g = await guest.newPage();
+watch(g);
 
-await step('login page loads and marks demo players as unverified', async () => {
-  await p.goto(BASE);
-  await p.locator('#demoHandle').waitFor();
-  await shot(p, 'desktop-login');
-  await p.fill('#demoHandle', handle);
-  await p.locator('#demoForm button[type=submit]').click();
-  await p.locator('#hatchBtn').waitFor({ state: 'visible' });
-  expect((await p.textContent('#whoBadge'))?.includes('unverified'), 'badge should say unverified');
+await step('sign-in page offers GitHub and nothing else', async () => {
+  await g.goto(BASE);
+  await g.locator('#ghBtn').waitFor({ state: 'visible' });
+  expect((await g.getAttribute('#ghBtn', 'href')) === '/auth/github', 'button goes to /auth/github');
+  expect((await g.locator('#v-login input, #v-login form').count()) === 0, 'no handle field or demo form');
+  expect(await g.locator('#signinMsg').isHidden(), 'no error on a first visit');
+  expect(await g.locator('#meadowCanvas').isVisible(), 'hero art shows');
+  await noSidewaysScroll(g);
+  await g.waitForTimeout(600);
+  await shot(g, 'desktop-signin');
 });
 
-await step('hatching reveals a creature card', async () => {
-  await p.click('#hatchBtn');
-  await p.locator('#meetBtn').waitFor({ state: 'visible', timeout: 15000 });
-  expect(((await p.textContent('#hatchCard')) ?? '').includes(`@${handle}`), 'card names the hatcher');
-  await shot(p, 'desktop-hatch');
-  await p.click('#meetBtn');
+await step('GitHub errors come back as friendly messages', async () => {
+  for (const [reason, words] of [
+    ['denied', 'cancelled'],
+    ['expired', 'took too long'],
+    ['unavailable', "couldn't reach GitHub"],
+  ]) {
+    await g.goto(`${BASE}/?signin=${reason}`);
+    await g.locator('#signinMsg').waitFor({ state: 'visible' });
+    const text = ((await g.textContent('#signinMsg')) ?? '').toLowerCase();
+    expect(text.includes(words.toLowerCase()), `${reason}: "${text}"`);
+    expect(!g.url().includes('signin='), 'reason is tidied out of the address bar');
+  }
+  await shot(g, 'desktop-signin-error');
+});
+
+await step('demo sign-in is gone and stray sessions are refused', async () => {
+  const demo = await fetch(`${BASE}/auth/demo`, {
+    method: 'POST',
+    body: '{"handle":"x"}',
+    headers: { 'content-type': 'application/json' },
+  });
+  expect(demo.status === 404, `/auth/demo should be 404, got ${demo.status}`);
+  const me = await fetch(`${BASE}/api/me`, { headers: { cookie: 'fk_session=not.a-session' } });
+  expect(me.status === 401, `a bad session should get 401, got ${me.status}`);
+  const mcp = await fetch(`${BASE}/mcp`, { method: 'POST', body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' });
+  expect(mcp.status === 401, `MCP without a token should get 401, got ${mcp.status}`);
+});
+
+await step('leaderboard still lists NPCs, with no unverified players', async () => {
+  const r = (await (await fetch(`${BASE}/api/leaderboard`)).json()) as { players: object[]; npcs: object[]; unranked: object[] };
+  expect(r.npcs.length > 0, 'house NPCs should be listed');
+  expect(
+    [...r.players, ...r.npcs, ...r.unranked].every((x) => !('verified' in x)),
+    'rows no longer carry a verified flag',
+  );
+});
+
+const guestPhone = await browser.newContext({
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 3,
+  isMobile: true,
+  hasTouch: true,
+});
+const gm = await guestPhone.newPage();
+watch(gm);
+await step('phone: sign-in page fits, with a full-width GitHub button', async () => {
+  await gm.goto(BASE);
+  await gm.locator('#ghBtn').waitFor({ state: 'visible' });
+  await noSidewaysScroll(gm);
+  const box = await gm.locator('#ghBtn').boundingBox();
+  expect(box && box.height >= 44 && box.width >= 300, `button is ${box?.width}x${box?.height}`);
+  await gm.waitForTimeout(600);
+  await shot(gm, 'phone-signin');
+});
+
+if (!SESSION) {
+  console.log('\nSet FORKLINGS_SESSION to run the signed-in checks too.');
+  await step('no script errors in the console', async () => {
+    expect(errors.length === 0, errors.join(' | '));
+  });
+  await browser.close();
+  console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
+  process.exit(failures ? 1 : 0);
+}
+
+// ---------- signed in (desktop) ----------
+const desktop: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 });
+const u = new URL(BASE);
+await desktop.addCookies([
+  { name: 'fk_session', value: SESSION, domain: u.hostname, path: '/', httpOnly: true, secure: u.protocol === 'https:' },
+]);
+const p = await desktop.newPage();
+watch(p);
+let handle = '';
+
+await step('a GitHub session signs straight in', async () => {
+  await p.goto(BASE);
+  await p.locator('#whoHandle').filter({ hasText: '@' }).waitFor();
+  handle = ((await p.textContent('#whoHandle')) ?? '').replace(/^@/, '');
+  expect(handle.length > 0, 'header shows the handle');
+});
+
+await step('hatching reveals a creature card (or the pet is already home)', async () => {
+  await p.locator('#hatchBtn:visible, #homeCanvas:visible').first().waitFor();
+  if (await p.locator('#hatchBtn').isVisible()) {
+    await p.click('#hatchBtn');
+    await p.locator('#meetBtn').waitFor({ state: 'visible', timeout: 15000 });
+    expect(((await p.textContent('#hatchCard')) ?? '').includes(`@${handle}`), 'card names the hatcher');
+    await shot(p, 'desktop-hatch');
+    await p.click('#meetBtn');
+  }
   await p.locator('#homeCanvas').waitFor({ state: 'visible' });
 });
 
@@ -129,7 +227,10 @@ await step('coaching tactics save', async () => {
 });
 
 await step('strategy script reports errors and saves', async () => {
-  await p.locator('#scriptPanel summary').click();
+  // A player who already saved a script finds the panel open; anyone else opens it.
+  await p.locator('#scriptPanel').evaluate((d) => {
+    (d as HTMLDetailsElement).open = true;
+  });
   await p.fill('#scriptSrc', 'when hp < : heal');
   await p.locator('#scriptForm button[type=submit]').click();
   await p.waitForFunction(() => (document.querySelector('#scriptMsg')?.textContent ?? '').includes('line 1, column 11'));
@@ -145,6 +246,8 @@ await step('strategy script reports errors and saves', async () => {
 await step('a battle plays out, ends on a result card with a reason, and lands in the log', async () => {
   await p.goto(`${BASE}/#battle`);
   expect(/Energy\s*\d+\/100/.test((await p.textContent('#energyLine')) ?? ''), 'energy shows where you fight');
+  // The session is a real player, so its pet may be worn out from an earlier run.
+  expect((await p.getAttribute('#fightBtn', 'data-rest')) !== 'true', 'pet needs a rest first: wait, or use a fresh player');
   await p.click('#fightBtn');
   await p.waitForFunction(() => /^vs @/.test(document.querySelector('#battleMsg')?.textContent ?? ''), null, { timeout: 15000 });
   expect((await p.textContent('#fightBtn')) === 'Battling…', 'the fight button says Battling… mid-fight');
@@ -162,11 +265,15 @@ await step('leaderboard pins this player and keeps NPCs apart', async () => {
   await p.goto(`${BASE}/#ranks`);
   await p.locator('#rankMe').waitFor({ state: 'visible' });
   const mine = (await p.textContent('#rankMe')) ?? '';
-  expect(mine.includes(`@${handle}`) && mine.includes('Unranked: GitHub account needed'), 'pinned row shows this demo player');
+  expect(mine.includes(`@${handle}`), 'pinned row shows this player');
   expect((await p.locator('#ranks .badge.npc').count()) === 0, 'ranked players list has no NPCs');
   expect((await p.locator('#ranksN .badge.npc').count()) > 0, 'NPCs are listed under House NPCs');
   expect(!(await p.locator('#ranksN').isVisible()), 'NPCs start collapsed');
-  await p.waitForFunction((h) => (document.querySelector('#ranksU')?.textContent ?? '').includes(`@${h}`), handle);
+  // A GitHub player is ranked or, under 30 days old, in practice: either way they're listed.
+  await p.waitForFunction(
+    (h) => `${document.querySelector('#ranks')?.textContent}${document.querySelector('#ranksU')?.textContent}`.includes(`@${h}`),
+    handle,
+  );
   await shot(p, 'desktop-ranks');
 });
 
@@ -190,8 +297,9 @@ await step('API tokens can be created, used for MCP, and revoked', async () => {
     j.result.content.some((c) => c.type === 'image'),
     'portrait returned',
   );
-  await p.locator('#tokenList [data-revoke]').first().click();
-  await p.waitForFunction(() => !document.querySelector('#tokenList [data-revoke]'));
+  const before = await p.locator('#tokenList [data-revoke]').count();
+  await p.locator('#tokenList [data-revoke]').last().click();
+  await p.waitForFunction((n) => document.querySelectorAll('#tokenList [data-revoke]').length < n, before);
   const after = await call({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   expect(after.status === 401, `revoked token should get 401, got ${after.status}`);
 });
@@ -211,8 +319,7 @@ await step('phone: home fits the screen without sideways scrolling', async () =>
   await m.goto(`${BASE}/#home`);
   await m.locator('#homeCanvas').waitFor({ state: 'visible' });
   await m.waitForTimeout(800);
-  const overflow = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-  expect(overflow <= 1, `page is ${overflow}px wider than the screen`);
+  await noSidewaysScroll(m);
   expect(await m.locator('#tabs').isVisible(), 'tab bar visible');
   await shot(m, 'phone-home');
 });

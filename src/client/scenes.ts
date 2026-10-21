@@ -24,6 +24,18 @@ import {
 } from './engine';
 
 /* ---------- hatch ---------- */
+/**
+ * How the hatch reveal scales with rarity, indexed by Genome.rarity (Common to Shiny): extra confetti,
+ * a flash and light in the rarity colour, and a longer hold on the rarity word before the card.
+ * The longest (Shiny) still shows the card before five seconds.
+ */
+const HATCH_TIERS = [
+  { confetti: 40, hold: 0, rays: 12, sparkle: 0 },
+  { confetti: 60, hold: 0.35, rays: 14, sparkle: 0 },
+  { confetti: 85, hold: 0.6, rays: 16, sparkle: 0.08 },
+  { confetti: 115, hold: 0.9, rays: 18, sparkle: 0.2 },
+  { confetti: 150, hold: 1.2, rays: 20, sparkle: 0.35 },
+];
 export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatched?: (g: Genome) => void }) {
   const st = new Stage(canvas, 96, 72, '#2c2146');
   st.floor = [58, '#4a3a6b'];
@@ -38,7 +50,7 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
     S.landed = false;
     S.parts.a = [];
   };
-  st.draw = (_x, t, dt) => {
+  st.draw = (x, t, dt) => {
     const g = S.g;
     if (!g) return;
     const bR = RAMPS[g.pal[0]],
@@ -87,17 +99,20 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
           jit = Math.floor(T * 28) % 2 ? 1 : -1;
           const a = clamp01((T - 2.4) / 0.55);
           st.glow(48, 46, 10 + a * 26, '#fff2dc', a * 0.8);
-          st.rays(48, 46, 30 + a * 20, T * 1.5, '#fff2dc', a * 0.12, 12);
+          // From Rare up, the light leaking through the cracks hints at the rarity colour.
+          st.rays(48, 46, 30 + a * 20, RM ? 0 : T * 1.5, g.rarity >= 2 ? RCOL[g.rarity] : '#fff2dc', a * 0.12, 12);
         }
         if (T > 0.95 && T < 1.05) st.shake(1, 0.08);
         if (T > 1.85 && T < 1.95) st.shake(1, 0.1);
         st.img(egg(g, lean, crack), gx + (RM ? 0 : jit), gy);
       } else {
+        const tier = HATCH_TIERS[g.rarity] ?? HATCH_TIERS[0],
+          rc = RCOL[g.rarity] ?? RCOL[0];
         if (!S.burst) {
           S.burst = true;
           S.flash = RM ? 0 : 1;
-          st.shake(2, 0.22);
-          for (let i = 0; i < 14; i++)
+          st.shake(2 + Math.min(1, g.rarity), 0.22 + g.rarity * 0.04);
+          for (let i = 0; i < 14 + g.rarity * 4; i++)
             S.parts.add({
               x: 44 + Math.random() * 8,
               y: 38 + Math.random() * 14,
@@ -109,26 +124,41 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
               life: 1 + Math.random() * 0.6,
               fade: 0.4,
             });
-          for (let i = 0; i < (RM ? 10 : 40); i++)
+          const confetti = RM ? 10 + g.rarity * 3 : tier.confetti;
+          for (let i = 0; i < confetti; i++)
             S.parts.add({
               x: 46 + Math.random() * 4,
               y: 40,
-              vx: (Math.random() - 0.5) * 110,
-              vy: -50 - Math.random() * 70,
+              vx: (Math.random() - 0.5) * (110 + g.rarity * 15),
+              vy: -50 - Math.random() * (70 + g.rarity * 10),
               g: 80,
               drag: 1.2,
-              s: 1,
-              c: [bR[1], bR[2], aR[1], aR[2], '#ffd166', '#fff2dc'][i % 6],
+              s: g.rarity && i % 5 === 0 ? 2 : 1,
+              // From Uncommon up, a share of the confetti is in the rarity colour.
+              c: g.rarity && i % 3 === 0 ? rc : [bR[1], bR[2], aR[1], aR[2], '#ffd166', '#fff2dc'][i % 6],
               life: 1.4 + Math.random() * 1.2,
               fade: 0.5,
             });
         }
-        const T2 = T - 2.95;
-        if (T2 < 2.2) {
-          const a = 1 - T2 / 2.2;
-          st.glow(48, 44, 34, bR[3], 0.35 * a);
-          st.rays(48, 44, 60, t * 0.6, '#fff2dc', 0.1 * a, 12);
+        const T2 = T - 2.95,
+          glowFor = 2.2 + tier.hold;
+        if (T2 < glowFor) {
+          const a = 1 - T2 / glowFor;
+          st.glow(48, 44, 34 + g.rarity * 4, g.rarity >= 2 ? rc : bR[3], (0.35 + g.rarity * 0.05) * a);
+          st.rays(48, 44, 60, RM ? 0.3 : t * 0.6, g.rarity ? rc : '#fff2dc', (0.1 + g.rarity * 0.025) * a, tier.rays);
         }
+        // Epic and Shiny pets keep twinkling in their rarity colour.
+        if (!RM && Math.random() < tier.sparkle)
+          S.parts.add({
+            x: 30 + Math.random() * 36,
+            y: 26 + Math.random() * 30,
+            vx: 0,
+            vy: -6,
+            s: 1,
+            c: Math.random() < 0.6 ? rc : '#fff2dc',
+            life: 0.7,
+            fade: 0.35,
+          });
         let y = 0,
           pose: Pose;
         const base = { stage: 0 };
@@ -163,7 +193,19 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
         } else pose = idlePose(g, t, base);
         pose.phase = Math.floor(t * 5) % 2;
         st.img(spr(g, pose), gx, gy + y);
-        if (T > 3.7 && !S.carded) {
+        // From Uncommon up, the rarity word pops in over the pet and holds until the card springs up.
+        if (g.rarity && T2 > 0.4 && T2 < 1.05 + tier.hold) {
+          const ca = T2 - 0.4,
+            size = 6 + Math.min(2, g.rarity),
+            word = `${RARITY[g.rarity]}!`,
+            w = Math.ceil(word.length * size * 0.6) + 8,
+            sc = RM ? 1 : ease.back(clamp01(ca / 0.3));
+          x.globalAlpha = clamp01(ca / (RM ? 0.3 : 0.12));
+          st.panel(48 - w / 2, 10, w, size + 4, INK, rc);
+          st.text(word, 48, 11.5 + (size * (1 - sc)) / 2, size * Math.max(0.6, sc), rc, 'center', 700);
+          x.globalAlpha = 1;
+        }
+        if (T > 3.7 + tier.hold && !S.carded) {
           S.carded = true;
           opts.onHatched?.(g);
         }
@@ -175,8 +217,8 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
     S.parts.step(dt);
     S.parts.draw(st);
     if (S.flash > 0) {
-      st.fadeAll('#fff6e6', S.flash);
-      S.flash -= dt / 0.35;
+      st.fadeAll(S.g.rarity ? (RCOL[S.g.rarity] ?? '#fff6e6') : '#fff6e6', S.flash);
+      S.flash -= dt / (0.35 + S.g.rarity * 0.08);
     }
   };
   return Object.assign(st, { hatch });

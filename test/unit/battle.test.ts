@@ -8,9 +8,12 @@ import {
   moveStats,
   type Snapshot,
   simulate,
+  strongAgainst,
+  TYPE_EDGE,
   turnSummary,
 } from '../../src/shared/battle';
 import { makeBot } from '../../src/shared/bots';
+import { TYPES } from '../../src/shared/genome';
 import { sha256Hex } from '../../src/shared/rng';
 import {
   type Ctx,
@@ -26,7 +29,6 @@ import {
 const snap = async (name: string, over: Partial<Snapshot> = {}): Promise<Snapshot> => ({
   pid: `p:${name}`,
   handle: name,
-  verified: false,
   bot: false,
   seed: await sha256Hex(`creature|${name}`),
   stage: 1,
@@ -96,6 +98,18 @@ describe('battle simulation', () => {
       r.maxHp[0] - r.events.at(-1)!.hp[0] + ms.filter((m) => m.side === 0).reduce((n, m) => n + m.heal, 0),
     );
     expect(turnSummary(r).split(' ').length).toBe(r.events.filter((e) => e.kind !== 'faint').length);
+  });
+});
+
+describe('types', () => {
+  test('each type has the edge over exactly one other, in a single loop', () => {
+    expect(TYPE_EDGE).toBeGreaterThan(1);
+    expect(new Set(TYPES.map(strongAgainst)).size).toBe(TYPES.length);
+    for (const t of TYPES) expect(strongAgainst(t)).not.toBe(t);
+    let t = TYPES[0];
+    for (let i = 0; i < TYPES.length; i++) t = strongAgainst(t);
+    expect(t).toBe(TYPES[0]);
+    expect(strongAgainst('Markup')).toBe('Data');
   });
 });
 

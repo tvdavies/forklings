@@ -71,7 +71,6 @@ export function makeBot(seedHex: string, playerXp: number): Snapshot {
   return {
     pid: `bot:${handle}`,
     handle,
-    verified: false,
     bot: true,
     seed,
     stage: stageForXp(xp),
