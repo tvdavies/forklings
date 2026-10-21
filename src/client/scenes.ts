@@ -671,6 +671,8 @@ export function makeBattle(canvas: HTMLCanvasElement) {
     }
     const won = R.res.winner === null ? null : R.res.winner === R.L;
     const after = T - R.end;
+    // The loot label is drawn after the sprites, so the opponent can't cover it.
+    let lootTag: { name: string; note: string; col: string; y: number; alpha: number } | null = null;
     if (after >= 0) {
       const a = after;
       if (won) {
@@ -750,14 +752,14 @@ export function makeBattle(canvas: HTMLCanvasElement) {
           const ic = itemIcon(R.loot);
           const iy = GY - 14 - 9 * ease.back(clamp01(c / 0.5));
           s.img(ic, 75 - Math.round(ic.width / 2), iy);
-          if (c > 0.45) {
-            x.globalAlpha = clamp01((c - 0.45) / 0.15);
-            const w = Math.max(40, it.name.length * 3.2 + 8);
-            s.panel(92, iy - 3, w, 15, INK, rc);
-            s.text(it.name, 95, iy - 1.8, 5.5, '#fff2dc');
-            s.text(RARITY[it.rarity] + (R.rep.lootNote === 'duplicate' ? ' (dupe: +10 XP)' : ''), 95, iy + 4.6, 4.5, rc);
-            x.globalAlpha = 1;
-          }
+          if (c > 0.45)
+            lootTag = {
+              name: it.name,
+              note: RARITY[it.rarity] + (R.rep.lootNote === 'duplicate' ? ' (dupe: +10 XP)' : ''),
+              col: rc,
+              y: iy - 18,
+              alpha: clamp01((c - 0.45) / 0.15),
+            };
         }
         s.img(open ? co : cc, 68 + wx, open ? cy - 2 : cy);
       }
@@ -776,6 +778,15 @@ export function makeBattle(canvas: HTMLCanvasElement) {
       const i = k === 'L' ? R.L : R.Rr;
       const p = { ...pose[k], stage: R.snaps[i].stage, phase: Math.floor(t * 5) % 2 };
       s.img(spr(R.gs[i], p), X[k] + dx[k], GY - 30 + dy[k], k === 'R');
+    }
+    if (lootTag) {
+      // Centred above the chest (x = 75), clear of the HP bars.
+      const w = Math.round(Math.max(40, lootTag.name.length * 3.2 + 8, lootTag.note.length * 2.6 + 8));
+      x.globalAlpha = lootTag.alpha;
+      s.panel(75 - Math.round(w / 2), lootTag.y, w, 15, INK, lootTag.col);
+      s.text(lootTag.name, 75, lootTag.y + 1.2, 5.5, '#fff2dc', 'center');
+      s.text(lootTag.note, 75, lootTag.y + 7.6, 4.5, lootTag.col, 'center');
+      x.globalAlpha = 1;
     }
     // HP with ghost bars
     for (const i of [0, 1]) {

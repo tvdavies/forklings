@@ -3,7 +3,8 @@
 import { type BattleResult, fighter, HELD_EFFECTS, MOVES, type Snapshot, type Tactics } from '../shared/battle';
 import { ITEMS, SLOTS } from '../shared/compose';
 import { describe, type Genome, genome, RARITY, RCOL, STAGE_NAMES } from '../shared/genome';
-import { type PetState, STAGE_XP } from '../shared/state';
+import { advance, type PetState, STAGE_XP } from '../shared/state';
+import { battleVerdict } from '../shared/verdict';
 import { itemIcon, paintStatic, RM, spr } from './engine';
 import { makeBattle, makeEvo, makeHatch, makeHome } from './scenes';
 
@@ -23,6 +24,7 @@ interface CreatureView {
   mood: string;
   nextStageXp: number | null;
   evolving: { from: number; to: number } | null;
+  cooldowns: Record<string, number>;
   battleEnergy: number;
   strategy: StrategyView;
 }
@@ -503,36 +505,171 @@ function sayLine() {
     ol.appendChild(li);
   };
 }
+let fighting = false;
+let battleReadyAt = 0; // the server keeps a short gap between battles
+const oppTag = (s: Snapshot) => (s.bot ? ' (house bot)' : s.pid.startsWith('npc:') ? ' (NPC)' : s.verified ? '' : ' (unverified)');
+
+/** Energy now (needs drift between reads), and whether the pet can fight or should rest at Home first. */
+function fightReadiness(c: CreatureView) {
+  const now = Date.now(),
+    energy = Math.floor(advance(c.state, now).energy),
+    napping = now < c.state.napUntil;
+  return { energy, napping, rest: napping || energy < c.battleEnergy };
+}
+
+/** Energy where the player fights: its level, what a fight costs, and what to do when it runs out. */
+function renderEnergy() {
+  const c = S.me?.creature;
+  if (!c) return;
+  const cost = c.battleEnergy,
+    { energy, napping, rest } = fightReadiness(c),
+    fights = Math.floor(energy / cost);
+  const btn = $<HTMLButtonElement>('fightBtn');
+  if (!fighting) {
+    btn.classList.remove('busy');
+    btn.removeAttribute('aria-busy');
+    btn.disabled = false;
+    btn.dataset.rest = String(rest);
+    btn.textContent = napping ? 'Wake it on Home' : rest ? 'Rest at Home' : `Find a battle (−${cost} energy)`;
+  }
+  const note = napping
+    ? `It's napping, which refills energy fastest.`
+    : rest
+      ? `A fight needs ${cost}. A nap refills energy fastest.`
+      : `Enough for ${fights} fight${fights === 1 ? '' : 's'}.`;
+  $('energyLine').innerHTML =
+    `<span>Energy</span><div class="bar" aria-hidden="true"><i style="width:${energy}%;background-color:#86bdff"></i></div><b>${energy}/100</b><span class="note">${note}</span>`;
+}
+
+function hideResult() {
+  $('resultCard').hidden = true;
+  $('fightBtn').parentElement!.hidden = false; // the row with Speed and Skip
+  $('energyLine').hidden = false;
+}
+
+/** The result card: won or lost, one reason why, what it earned, and the next step. */
+function showResult(out: BattleOut, res: BattleResult) {
+  const c = S.me!.creature!;
+  const v = battleVerdict(out.a, out.b, res, 0);
+  const title = $('resultTitle');
+  title.textContent = v.outcome === 'win' ? 'Won' : v.outcome === 'loss' ? 'Lost' : 'Draw';
+  title.className = `result-title ${v.outcome}`;
+  $('resultVs').textContent = `vs @${out.b.handle}${oppTag(out.b)}`;
+  $('resultWhy').textContent = v.reason;
+
+  const xpLeft = c.nextStageXp ? Math.max(0, c.nextStageXp - Math.floor(c.state.xp)) : 0;
+  const xpNote = c.evolving ? 'Ready to evolve!' : xpLeft ? `${xpLeft} XP until it becomes a ${STAGE_NAMES[c.stage + 1]}` : '';
+  const sign = out.ratingDelta > 0 ? '+' : out.ratingDelta < 0 ? '−' : '±';
+  let rows =
+    `<dt>XP</dt><dd>+${out.xp}<span class="note">${xpNote}</span></dd>` +
+    `<dt>Rating</dt><dd>${out.ranked ? `<span class="${out.ratingDelta < 0 ? 'down' : 'up'}">${sign}${Math.abs(out.ratingDelta)}</span>` : 'Unranked'}</dd>`;
+  const it = out.loot ? ITEMS[out.loot] : undefined;
+  if (out.loot && it) {
+    const fx = HELD_EFFECTS[out.loot] ? ` · Battle: ${HELD_EFFECTS[out.loot].label}` : '';
+    rows += `<dt>Loot</dt><dd class="loot"><canvas aria-hidden="true"></canvas><span>${esc(it.name)} · <span style="color:${RCOL[it.rarity]}">${RARITY[it.rarity]}</span><span class="note">${out.lootNote === 'duplicate' ? 'Already yours: +10 XP' : 'New'}${fx}</span></span></dd>`;
+  }
+  const dl = $('resultRows');
+  dl.innerHTML = rows;
+  if (out.loot && it) {
+    const id = out.loot;
+    paintStatic(dl.querySelector('canvas')!, itemIcon(id), 32);
+    if (c.items[it.slot] !== id) {
+      const wear = document.createElement('button');
+      wear.type = 'button';
+      wear.className = 'btn small-btn';
+      wear.id = 'resultWear';
+      wear.textContent = 'Wear it';
+      wear.addEventListener('click', async () => {
+        wear.disabled = true;
+        try {
+          const r = await api<PlayerView>('/api/equip', { body: { slot: it.slot, item: id } });
+          S.me = { ...S.me!, ...r };
+          S.g = petGenome(S.me.creature!);
+          const worn = document.createElement('span');
+          worn.className = 'worn';
+          worn.textContent = 'Wearing it';
+          wear.replaceWith(worn);
+          $('resultAgain').focus({ preventScroll: true }); // the focused button just went away
+        } catch (e) {
+          wear.disabled = false;
+          $('battleMsg').textContent = errMsg(e);
+        }
+      });
+      dl.querySelector('.loot')!.appendChild(wear);
+    }
+  }
+
+  // One primary action: the plan when the reason is about tactics, otherwise another fight.
+  const coach = $('resultCoach'),
+    again = $<HTMLButtonElement>('resultAgain');
+  coach.className = v.nudge === 'coach' ? 'btn' : 'btn ghost';
+  again.className = v.nudge === 'coach' ? 'btn ghost' : 'btn';
+  const { energy, rest } = fightReadiness(c);
+  again.innerHTML = rest
+    ? `Rest at Home<small>Has ${energy} of ${c.battleEnergy} energy</small>`
+    : `Fight again<small>${energy} energy left</small>`;
+  again.dataset.rest = String(rest);
+
+  $('battleMsg').textContent = '';
+  $('fightBtn').parentElement!.hidden = true; // the card's Fight again takes over
+  $('energyLine').hidden = true;
+  $('resultCard').hidden = false;
+  title.focus({ preventScroll: true });
+}
+
+async function startFight() {
+  const c = S.me?.creature;
+  if (fighting || !c) return;
+  const btn = $<HTMLButtonElement>('fightBtn');
+  fighting = true;
+  hideResult();
+  // Busy, not disabled-looking: the fight is happening.
+  btn.disabled = true;
+  btn.classList.add('busy');
+  btn.setAttribute('aria-busy', 'true');
+  $('battleMsg').textContent = '';
+  const wait = battleReadyAt - Date.now();
+  if (wait > 0) {
+    btn.textContent = 'Catching its breath…';
+    await new Promise((r) => setTimeout(r, wait));
+  }
+  btn.textContent = 'Finding a rival…';
+  try {
+    const out = await api<BattleOut>('/api/battle', { body: {} });
+    const now = Date.now(),
+      st = advance(c.state, now);
+    c.state = { ...st, energy: Math.max(0, st.energy - c.battleEnergy) };
+    btn.textContent = 'Battling…';
+    renderEnergy();
+    $('battleMsg').textContent = `vs @${out.b.handle}${oppTag(out.b)}`;
+    battleStage.play(out, 0, {
+      speed,
+      onLine: sayLine(),
+      onDone: async (res: BattleResult) => {
+        fighting = false;
+        await refresh().catch(() => {});
+        battleReadyAt = Date.now() + (S.me?.creature?.cooldowns.battle ?? 0);
+        showResult(out, res);
+        renderEnergy();
+        renderBattleLog();
+        if (S.me!.creature?.evolving) location.hash = '#home';
+      },
+    });
+  } catch (e) {
+    fighting = false;
+    $('battleMsg').textContent = errMsg(e);
+    renderEnergy();
+  }
+}
+
 function initBattle() {
   battleStage = makeBattle($<HTMLCanvasElement>('battleCanvas'));
-  $('fightBtn').addEventListener('click', async () => {
-    const btn = $<HTMLButtonElement>('fightBtn');
-    btn.disabled = true;
-    $('battleMsg').textContent = 'Looking for a rival…';
-    try {
-      const out = await api<BattleOut>('/api/battle', { body: {} });
-      $('battleMsg').textContent =
-        `vs @${out.b.handle}${out.b.bot ? ' (house bot)' : out.b.pid.startsWith('npc:') ? ' (NPC)' : out.b.verified ? '' : ' (unverified)'}`;
-      battleStage.play(out, 0, {
-        speed,
-        onLine: sayLine(),
-        onDone: async (res: BattleResult) => {
-          const won = res.winner === 0;
-          $('battleMsg').textContent =
-            `${won ? 'Won' : res.winner === null ? 'Draw' : 'Lost'} vs @${out.b.handle}. +${out.xp} XP, ${out.ranked ? `rating ${out.ratingDelta >= 0 ? '+' : ''}${out.ratingDelta}` : 'unranked'}${out.loot ? `, found ${ITEMS[out.loot]?.name ?? 'something'}${out.lootNote === 'duplicate' ? ' (duplicate, +10 XP)' : ''}` : ''}.`;
-          btn.disabled = false;
-          await refresh();
-          renderBattleLog();
-          if (S.me!.creature?.evolving) {
-            location.hash = '#home';
-          }
-        },
-      });
-    } catch (e) {
-      $('battleMsg').textContent = errMsg(e);
-      btn.disabled = false;
-    }
-  });
+  for (const id of ['fightBtn', 'resultAgain'])
+    $(id).addEventListener('click', () => {
+      if ($(id).dataset.rest === 'true') location.hash = '#home';
+      else startFight();
+    });
+  $('resultClose').addEventListener('click', hideResult);
   $('speedBtn').addEventListener('click', () => {
     speed = speed === 1 ? 2 : speed === 2 ? 4 : 1;
     $('speedBtn').textContent = `Speed ×${speed}`;
@@ -543,7 +680,7 @@ function initBattle() {
 async function renderBattleLog() {
   const c = S.me?.creature;
   if (!c) return;
-  $('fightBtn').textContent = `Find a battle (−${c.battleEnergy} energy)`;
+  renderEnergy();
   const r = await api<{ battles: BattleRow[] }>('/api/battles');
   $('battleDot').hidden = true;
   const ul = $('battleLog');
@@ -569,6 +706,7 @@ async function renderBattleLog() {
     btn.addEventListener('click', async () => {
       const rep = await api<ReplayResponse>(`/api/battles/${encodeURIComponent(btn.dataset.replay!)}`);
       const loot = rep.side === 0 ? (r.battles.find((x) => x.id === rep.id)?.loot || '').split(':')[0] || null : null;
+      hideResult();
       $('battleMsg').textContent = `Replay vs @${rep.side === 0 ? rep.b.handle : rep.a.handle}`;
       battleStage.play({ ...rep, loot }, rep.side, { speed, onLine: sayLine() });
       window.scrollTo({ top: 0, behavior: RM ? 'auto' : 'smooth' });

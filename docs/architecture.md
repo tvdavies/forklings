@@ -24,6 +24,7 @@ MCP clients ────┘  /api /auth /mcp    │    script, battle log, repla
 | `src/shared/strategy.ts` | The strategy AST and its fuel-limited interpreter |
 | `src/shared/script.ts` | Tokeniser and parser for strategy scripts |
 | `src/shared/battle.ts` | The battle simulation, held-item effects and per-turn summaries |
+| `src/shared/verdict.ts` | One reason a battle was won or lost, for the result card |
 | `src/shared/npcs.ts`, `bots.ts` | The house NPC roster and the fallback bots |
 | `src/worker/` | HTTP routing, auth, the two Durable Objects, the MCP server and the cron |
 | `src/client/` | The web app: canvas renderer, scenes (room, hatch, battle, evolution) and UI |

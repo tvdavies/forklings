@@ -191,6 +191,9 @@ export class PlayerDO extends DurableObject<Env> {
       const left = r.at + COOLDOWNS[r.action] - now;
       if (left > 0) cool[r.action] = left;
     }
+    // Lets the web app wait out the gap between battles instead of failing a quick "Fight again".
+    const battleLeft = (this.get<number>('lastBattle') ?? 0) + BATTLE_COOLDOWN_MS - now;
+    if (battleLeft > 0) cool.battle = battleLeft;
     return {
       who,
       creature: {

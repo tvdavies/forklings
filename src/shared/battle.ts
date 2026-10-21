@@ -89,7 +89,7 @@ export function fighter(snap: Snapshot): Fighter {
   };
 }
 
-function typeMult(att: string, def: string): number {
+export function typeMult(att: string, def: string): number {
   const i = TYPES.indexOf(att),
     j = TYPES.indexOf(def);
   return (i + 1) % TYPES.length === j ? 1.15 : 1;

@@ -147,6 +147,20 @@
           <button class="btn ghost small-btn" id="speedBtn" type="button">Speed ×1</button>
           <button class="btn ghost small-btn" id="skipBtn" type="button">Skip</button>
         </div>
+        <div class="energy" id="energyLine"></div>
+        <section class="panel result" id="resultCard" aria-labelledby="resultTitle" hidden>
+          <div class="result-head">
+            <h3 class="result-title" id="resultTitle" tabindex="-1"></h3>
+            <span class="result-vs" id="resultVs"></span>
+            <button class="link result-close" id="resultClose" type="button">Close</button>
+          </div>
+          <p class="result-why" id="resultWhy"></p>
+          <dl class="result-rows" id="resultRows"></dl>
+          <div class="result-actions">
+            <a class="btn ghost" id="resultCoach" href="#coach">Adjust tactics</a>
+            <button class="btn" id="resultAgain" type="button">Fight again</button>
+          </div>
+        </section>
         <p class="toastline" id="battleMsg" aria-live="polite"></p>
       </div>
       <div>
