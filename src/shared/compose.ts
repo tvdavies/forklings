@@ -4,13 +4,55 @@
 import { type Genome, INK, RAMPS } from './genome';
 import { mulberry } from './rng';
 
-export type Slot = 'head' | 'face' | 'neck' | 'held';
+export type Slot = 'head' | 'face' | 'neck' | 'body' | 'held';
+export type Stat = 'hp' | 'atk' | 'def' | 'spd';
 /** A pixel map (one character per pixel, '.' is empty) and the colour for each character. */
 export interface IconDef {
   map: string[];
   cols: Record<string, string>;
 }
-/** A wardrobe item. Items with a `map` are stamped from it; `proc` items are drawn in code by compose(). */
+/**
+ * Parametric drawing for generated items that have to fit each body rather than be stamped:
+ * eyewear around the eyes, neckwear along the neck line, headphones around the head and
+ * clothes over the torso. `style` picks the shape and `c` lists its colours (palette hexes).
+ */
+export type ParamKind = 'lens' | 'band' | 'phones' | 'wear';
+export interface ItemParams {
+  style: string;
+  c: string[];
+  /** Surface pattern for clothes: 'plain', 'stripes', 'wide', 'pin', 'check', 'dots', 'halves', 'yoke', 'hem', 'diag'. */
+  pat?: string;
+}
+
+/** Whether pattern `pat` puts the accent colour at (x, y), relative to the centre column and the neck line. */
+export function patternOn(pat: string | undefined, dx: number, dy: number): boolean {
+  switch (pat) {
+    case 'stripes':
+      return dy % 3 === 2;
+    case 'wide':
+      return (dy >> 1) % 2 === 1;
+    case 'pin':
+      return ((dx % 3) + 3) % 3 === 0;
+    case 'check':
+      return ((dx >> 1) + (dy >> 1)) % 2 === 0;
+    case 'dots':
+      return dy % 3 === 1 && (((dx + (dy % 6 === 1 ? 0 : 2)) % 4) + 4) % 4 === 0;
+    case 'halves':
+      return dx >= 0;
+    case 'yoke':
+      return dy < 3;
+    case 'hem':
+      return dy >= 6;
+    case 'diag':
+      return (((dx + dy) % 4) + 4) % 4 < 2;
+    default:
+      return false;
+  }
+}
+/**
+ * A wardrobe item. Items with a `map` are stamped from it; `proc` items are drawn in code by
+ * compose(); generated items with a `kind` are drawn from their `p` parameters.
+ */
 export interface ItemDef {
   slot: Slot;
   name: string;
@@ -21,6 +63,12 @@ export interface ItemDef {
   map?: string[];
   cols?: Record<string, string>;
   anim?: string[];
+  kind?: ParamKind;
+  p?: ItemParams;
+  /** Battle effect of a generated held item (other slots are cosmetic). Capped by the engine. */
+  effect?: { stat: Stat; pct: number };
+  /** The UTC day a generated item was made, YYYY-MM-DD. Absent for the classic items. */
+  day?: string;
 }
 type MapItem = ItemDef & IconDef;
 const hasMap = (it: ItemDef): it is MapItem => !!it.map;
@@ -117,8 +165,13 @@ export const SLOTS: [Slot, string][] = [
   ['head', 'Head'],
   ['face', 'Face'],
   ['neck', 'Neck'],
+  ['body', 'Body'],
   ['held', 'Held'],
 ];
+export const SLOT_IDS: Slot[] = SLOTS.map(([s]) => s);
+export const isSlot = (s: unknown): s is Slot => SLOT_IDS.includes(s as Slot);
+/** An empty outfit, one key per slot. */
+export const noItems = (): Record<Slot, string | null> => ({ head: null, face: null, neck: null, body: null, held: null });
 export const ITEM_IDS = Object.keys(ITEMS);
 
 const GR = { NONE: 0, BODY: 1, ACC: 2, BELLY: 3, DARK: 4, WHITE: 5, BLUSH: 6, MOUTH: 7, ITEM: 8, LINE: 9, STALK: 10 };
@@ -158,6 +211,8 @@ export interface Pose {
   phase?: number;
   L?: number;
   noItems?: boolean;
+  /** Keep only the item pixels (and their outline): used for shop icons and the distinctness check. */
+  itemsOnly?: boolean;
 }
 /** The resting animation at time t (seconds): a two-beat bob, blinks and tail sway. */
 export function idlePose(g: Pick<Genome, 'blinkOff'>, t: number, extra?: Pose): Pose {
@@ -168,6 +223,12 @@ export function idlePose(g: Pick<Genome, 'blinkOff'>, t: number, extra?: Pose): 
 
 /** One pixel: a '#rrggbb' colour, or null for transparent. */
 export type Px = string | null;
+/** Per-slot item pixels: how many were drawn, how many fell off the 32x32 canvas, how many are still visible at the end. */
+export interface ItemFit {
+  drawn: number;
+  clipped: number;
+  visible: number;
+}
 export interface SpriteMeta {
   cx: number;
   cy: number;
@@ -175,6 +236,7 @@ export interface SpriteMeta {
   ry: number;
   eyeY: number;
   headTop: number;
+  items: Partial<Record<Slot, ItemFit>>;
 }
 /** The genome traits the composer reads. Items are optional: without them the creature is drawn bare. */
 export type SpriteGenome = Pick<
@@ -195,7 +257,7 @@ export type SpriteGenome = Pick<
   | 'pal'
   | 'belly'
   | 'seed'
-> & { items?: Genome['items'] };
+> & { items?: Genome['items']; gear?: Record<string, ItemDef> };
 type Pred = (px: number, py: number) => boolean;
 
 export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: SpriteMeta } {
@@ -290,6 +352,34 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
   const headTop = topY(15.5);
   const items: Record<string, string | null> = L & L_ITEMS && !pose.noItems ? g.items || {} : {};
   const hatOn = !!items.head;
+  // Item definitions: the classics by id, generated items from the outfit's `gear`.
+  const def = (id: string | null | undefined): ItemDef | undefined => (id ? (g.gear?.[id] ?? ITEMS[id]) : undefined);
+  const kindOf = (s: Slot) => {
+    const d = def(items[s]);
+    return d?.kind ? d : undefined;
+  };
+  // Which slot drew each item pixel, so callers (and the fit tests) can see what survived.
+  const islot = new Uint8Array(N);
+  const fit: Partial<Record<Slot, ItemFit>> = {};
+  let cur = 0;
+  const begin = (s: Slot) => {
+    cur = SLOT_IDS.indexOf(s) + 1;
+    fit[s] ??= { drawn: 0, clipped: 0, visible: 0 };
+  };
+  /** Paint one item pixel for the current slot; off-canvas pixels are counted as clipped. */
+  const paint = (x: number, y: number, col: string, outlined = false) => {
+    const f = cur ? fit[SLOT_IDS[cur - 1]] : undefined;
+    if (f) f.drawn++;
+    if (!inb(x, y)) {
+      if (f) f.clipped++;
+      return;
+    }
+    const q = y * W + x;
+    grp[q] = GR.ITEM;
+    icol[q] = col;
+    islot[q] = cur;
+    if (outlined) edge[q] = 1;
+  };
 
   if (st === 2 && L & L_EARS) {
     // wings
@@ -551,14 +641,9 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
         if (ch === '.') continue;
         const x = x0 + i,
           y = y0 + j;
-        if (!inb(x, y)) continue;
-        const q = y * W + x;
-        if (map) {
-          grp[q] = GR.ITEM;
-          icol[q] = map[ch];
-        } else {
-          grp[q] = ch === 'd' ? GR.DARK : ch === 'w' ? GR.WHITE : ch === 'm' ? GR.MOUTH : ch === 'b' ? GR.BLUSH : GR.DARK;
-        }
+        if (map) paint(x, y, map[ch]);
+        else if (inb(x, y))
+          grp[y * W + x] = ch === 'd' ? GR.DARK : ch === 'w' ? GR.WHITE : ch === 'm' ? GR.MOUTH : ch === 'b' ? GR.BLUSH : GR.DARK;
       }
   };
   const eyeCentres =
@@ -572,8 +657,59 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
     y0open = eyeY - Math.floor(openH / 2);
   const boxes = eyeCentres.map((c) => [Math.round(c - ow / 2) + look, y0open, ow, openH]);
   const mouthY = y0open + openH + (g.eyes === 'cyclops' ? 0 : 1);
+  const lens = kindOf('face');
+  /** Generated eyewear. Clear-lens styles go on before the eyes (so the eyes show through), tinted ones after. */
+  const drawLens = (p: ItemParams, over: boolean) => {
+    const [frame, glass, extra] = p.c;
+    // Drawn alone (icons, distinctness), clear lenses go over the eyes too, so the glass shows.
+    const tinted = p.style === 'visor' || !!pose.itemsOnly;
+    if (tinted !== over && !(pose.itemsOnly && !over)) return;
+    begin('face');
+    if (p.style === 'visor') {
+      const xa = boxes[0][0] - 1,
+        xb = boxes[boxes.length - 1][0] + ow;
+      for (let x = xa; x <= xb; x++) {
+        paint(x, eyeY - 1, frame);
+        paint(x, eyeY, x === xa + 1 ? '#ffffff' : glass);
+        paint(x, eyeY + 1, extra);
+      }
+      return;
+    }
+    const list = p.style === 'monocle' ? [boxes[boxes.length - 1]] : boxes;
+    list.forEach(([x0, yy, w, h], bi) => {
+      const bx0 = x0 - 1,
+        bx1 = x0 + Math.max(w, 2),
+        by1 = yy + Math.max(h, 3),
+        by0 = p.style === 'half' ? yy + Math.floor(Math.max(h, 3) / 2) : yy - 1;
+      const fill = p.style === '3d' ? (bi === 0 ? glass : extra) : glass;
+      for (let y = by0; y <= by1; y++)
+        for (let x = bx0; x <= bx1; x++) {
+          const corner = (x === bx0 || x === bx1) && (y === by0 || y === by1);
+          if (corner && (p.style === 'round' || p.style === 'cat' || p.style === 'monocle' || p.style === 'aviator')) continue;
+          const rim = x === bx0 || x === bx1 || y === by0 || y === by1;
+          // browline: a heavy top bar in the accent colour; aviator: a lower tint band
+          const col = p.style === 'browline' && y === by0 ? extra : rim ? frame : p.style === 'aviator' && y >= by1 - 1 ? extra : fill;
+          paint(x, y, col);
+        }
+      if (p.style === 'browline') for (let x = bx0; x <= bx1; x++) paint(x, by0 - 1, extra);
+      if (p.style === 'aviator') for (let x = bx0 + 1; x < bx1; x++) paint(x, by1 + 1, frame);
+      if (p.style === 'cat') paint(bi === 0 && list.length > 1 ? bx0 - 1 : bx1 + 1, by0 - 1, frame);
+      if (p.style === 'monocle') for (let k = 1; k <= 3; k++) paint(bx1 + (k > 1 ? 1 : 0), by1 + k, extra);
+    });
+    if (list.length === 2 && p.style !== 'half') {
+      const y = list[0][1];
+      for (let x = list[0][0] + list[0][2] + 1; x < list[1][0] - 1; x++) paint(x, y, frame);
+    }
+    if (p.style === 'goggles') {
+      // the strap runs across the head at eye level, wherever the body is
+      const y = list[0][1];
+      for (let x = 0; x < W; x++) if (bm[y * W + x] && grp[y * W + x] !== GR.ITEM) paint(x, y, extra);
+    }
+  };
   if (L & L_FACE && L & L_BODY) {
+    if (lens?.p) drawLens(lens.p, false);
     if (items.face === 'glasses') {
+      begin('face');
       for (const [x0, yy, w, h] of boxes) {
         const bx0 = x0 - 1,
           by0 = yy - 1,
@@ -584,20 +720,15 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
             if (!inb(x, y)) continue;
             const corner = (x === bx0 || x === bx1) && (y === by0 || y === by1);
             if (corner) continue;
-            const q = y * W + x;
-            grp[q] = GR.ITEM;
-            icol[q] = x === bx0 || x === bx1 || y === by0 || y === by1 ? '#e39b3a' : '#d2efff';
+            paint(x, y, x === bx0 || x === bx1 || y === by0 || y === by1 ? '#e39b3a' : '#d2efff');
           }
       }
       if (boxes.length === 2) {
         const y = boxes[0][1];
-        for (let x = boxes[0][0] + boxes[0][2] + 1; x < boxes[1][0] - 1; x++)
-          if (inb(x, y)) {
-            grp[y * W + x] = GR.ITEM;
-            icol[y * W + x] = '#e39b3a';
-          }
+        for (let x = boxes[0][0] + boxes[0][2] + 1; x < boxes[1][0] - 1; x++) if (inb(x, y)) paint(x, y, '#e39b3a');
       }
     }
+    cur = 0;
     eyeCentres.forEach((c, ix) => {
       const right = ix === 1;
       let m = openMap;
@@ -654,7 +785,9 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
     const mm = pose.mouth || g.mouth;
     const mmap = MOUTH[mm];
     stamp(mmap, cx - mmap[0].length / 2, mouthY);
+    if (lens?.p) drawLens(lens.p, true);
     if (items.face === 'shades') {
+      begin('face');
       const xa = boxes[0][0] - 1,
         xb = boxes[boxes.length - 1][0] + ow;
       for (let y = eyeY - 1; y <= eyeY + 1; y++)
@@ -662,9 +795,7 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
           if (!inb(x, y)) continue;
           const inLens = boxes.some(([x0, , w]) => x >= x0 - 1 && x <= x0 + w);
           if (y > eyeY - 1 && !inLens) continue;
-          const q = y * W + x;
-          grp[q] = GR.ITEM;
-          icol[q] = INK;
+          paint(x, y, INK);
         }
       for (const [x0] of boxes) {
         const q = eyeY * W + x0;
@@ -676,74 +807,236 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
   }
   if (L & L_ITEMS) {
     const ny = mouthY + MOUTH[pose.mouth || g.mouth].length + 1;
-    if (items.neck === 'scarf') {
-      for (const y of [ny, ny + 1])
-        for (let x = 0; x < W; x++) {
-          const q = y * W + x;
-          if (!inb(x, y)) continue;
-          const nearB = bm[q] || (x > 0 && bm[q - 1]) || (x < W - 1 && bm[q + 1]);
-          if (!nearB) continue;
-          grp[q] = GR.ITEM;
-          icol[q] = y === ny + 1 ? '#7e1f3a' : (x >> 1) % 2 ? '#cf3a4a' : '#ff6f62';
-        }
-      const sx = Math.round(cx - rx * 0.35);
-      for (let y = ny + 2; y <= ny + 4; y++)
-        for (const x of [sx, sx + 1]) {
-          if (inb(x, y)) {
-            const q = y * W + x;
-            grp[q] = GR.ITEM;
-            icol[q] = y === ny + 4 ? '#ffd166' : '#cf3a4a';
-          }
-        }
-    }
-    if (items.neck === 'bowtie') {
-      const it = ITEM_DEFS.bowtie;
-      stamp(it.map, cx - 3, ny, it.cols);
-    }
+    const nearBody = (x: number, y: number) => {
+      const q = y * W + x;
+      return inb(x, y) && !!(bm[q] || (x > 0 && bm[q - 1]) || (x < W - 1 && bm[q + 1]));
+    };
     const markEdge = (x0: number, y0: number, m: string[]) => {
       for (let j = 0; j < m.length; j++)
         for (let i = 0; i < m[j].length; i++) if (m[j][i] !== '.' && inb(x0 + i, y0 + j)) edge[(y0 + j) * W + x0 + i] = 1;
     };
-    if (items.held && ITEMS[items.held] && st > 0) {
-      const it = ITEMS[items.held] as MapItem; /* every held item is a map item */
-      const x0 = Math.round(cx + rx - 3),
-        y0 = Math.round(cy + ry * 0.3) - it.map.length + 3;
-      stamp(it.map, x0, y0, it.cols);
-      markEdge(x0, y0, it.map);
+    const stampItem = (s: Slot, m: string[], x0: number, y0: number, colMap: Record<string, string>, outlined: boolean) => {
+      begin(s);
+      x0 = Math.round(x0);
+      stamp(m, x0, y0, colMap);
+      if (outlined) markEdge(x0, y0, m);
+    };
+    /** Torso pixels below the neck line: body and arms, not ears, feet, eyes or mouth. */
+    const torso = (q: number, y: number) => y >= ny && grp[q] >= 1 && grp[q] <= 3 && (shp[q] === 1 || shp[q] === 7);
+
+    // Clothes recolour the torso, so they go on before anything worn over them.
+    const wear = kindOf('body');
+    if (wear?.p) {
+      const { style, c } = wear.p;
+      const tone = (q: number) => c[Math.min(3, shade[q])];
+      begin('body');
+      /** The main body's left and right edge on a row, or null. */
+      const span = (y: number): [number, number] | null => {
+        let l = -1,
+          r2 = -1;
+        for (let x = 0; x < W; x++)
+          if (bm[y * W + x] && shp[y * W + x] === 1) {
+            if (l < 0) l = x;
+            r2 = x;
+          }
+        return l < 0 ? null : [l, r2];
+      };
+      let bottom = H - 1;
+      while (bottom > 0 && !span(bottom)) bottom--;
+      const icx = Math.round(cx);
+      if (style === 'cape') {
+        // Hangs behind: only the part outside the body shows, flaring towards the hem.
+        const top = Math.max(headTop + 3, eyeY - 2);
+        for (let y = top; y <= bottom; y++) {
+          const s = span(y);
+          if (!s) continue;
+          const spread = 1 + Math.min(2, Math.floor((y - top) / 3));
+          for (let k = 1; k <= spread; k++) {
+            const col = y === bottom ? c[0] : k === spread ? c[1] : patternOn(wear.p.pat, k, y - top) ? c[4] : c[2];
+            for (const x of [s[0] - k, s[1] + k]) if (!bm[y * W + x] || grp[y * W + x] === GR.NONE) paint(x, y, col, true);
+          }
+        }
+        for (const x of [icx - 1, icx]) paint(x, ny, c[4]);
+      } else if (style === 'wings') {
+        // Small fairy wings behind the shoulders.
+        const y0 = Math.round(cy - ry * 0.35),
+          s = span(y0 + 2);
+        if (s) {
+          const wing = ['.aa', 'abw', 'abb', '.ab', '..a'];
+          const colMap = { a: c[1], b: c[4], w: '#fff2dc' };
+          stampItem('body', wing, s[0] - 3, y0, colMap, true);
+          stampItem(
+            'body',
+            wing.map((l) => [...l].reverse().join('')),
+            s[1] + 1,
+            y0,
+            colMap,
+            true,
+          );
+        }
+      } else if (style === 'tutu') {
+        // A frilled skirt round the bottom of the body, sticking out a pixel each side.
+        for (const [y, out] of [
+          [bottom - 2, 1],
+          [bottom - 1, 2],
+        ] as const) {
+          const s = span(y);
+          if (!s) continue;
+          for (let x = s[0] - out; x <= s[1] + out; x++) paint(x, y, out === 2 ? ((x + y) % 2 ? c[4] : c[2]) : c[3], true);
+        }
+      } else if (style !== 'backpack') {
+        for (let y = ny; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            const q = y * W + x;
+            if (!torso(q, y)) continue;
+            const ax = Math.abs(x + 0.5 - cx);
+            if (style === 'vest' && ax < 1.6 && shp[q] === 1) continue;
+            if (style === 'overalls' && y < ny + 3 && ax > 2.6 && shp[q] === 1) continue;
+            let col = tone(q);
+            const pat = wear.p.pat ?? (style === 'jumper' ? 'stripes' : 'plain');
+            if (patternOn(pat, x - Math.round(cx), y - ny)) col = c[4];
+            if (style === 'jumper' && y === ny) col = c[0];
+            if (style === 'vest' && ax < 2.6 && (y - ny) % 2 === 1 && shp[q] === 1) col = c[4];
+            paint(x, y, col);
+          }
+        if (style === 'hoodie') {
+          for (let y = headTop + 2; y < ny; y++)
+            for (let x = 0; x < W; x++) {
+              const q = y * W + x;
+              if (!bm[q] || grp[q] < 1 || grp[q] > 3) continue;
+              const rim = (x > 0 && !bm[q - 1]) || (x < W - 1 && !bm[q + 1]) || (y > 0 && !bm[q - W]);
+              if (rim) paint(x, y, c[1]);
+            }
+          for (const x of [Math.round(cx) - 2, Math.round(cx) + 1]) for (let y = ny; y <= ny + 2; y++) if (bm[y * W + x]) paint(x, y, c[4]);
+          for (let x = Math.round(cx) - 3; x <= Math.round(cx) + 2; x++) if (bm[(ny + 4) * W + x]) paint(x, ny + 4, c[0]);
+        }
+        if (style === 'tee') {
+          const lx = Math.round(cx) - 1;
+          for (const [i, j, k] of [
+            [0, 0, 4],
+            [2, 0, 4],
+            [1, 1, 5],
+            [0, 2, 4],
+            [2, 2, 4],
+          ])
+            if (bm[(ny + 2 + j) * W + lx + i]) paint(lx + i, ny + 2 + j, c[k] ?? c[4]);
+        }
+        if (style === 'overalls')
+          for (const s of [-1, 1]) {
+            const x = Math.round(cx + s * rx * 0.45) - (s > 0 ? 1 : 0);
+            for (let y = ny; y < ny + 3; y++) if (bm[y * W + x]) paint(x, y, c[1]);
+            if (bm[(ny + 3) * W + Math.round(cx) + s * 2]) paint(Math.round(cx) + (s > 0 ? 1 : -2), ny + 3, c[4]);
+          }
+      } else {
+        // straps over the shoulders, the pack itself peeking out on the left
+        for (const s of [-1, 1]) {
+          const x = Math.round(cx + s * rx * 0.45) - (s > 0 ? 1 : 0);
+          for (let y = ny; y < H; y++) if (torso(y * W + x, y)) paint(x, y, c[1]);
+        }
+        const pack = ['.333.', '24442', '21222', '24442', '21112', '21112', '11111', '.000.'];
+        const colMap: Record<string, string> = { '0': c[0], '1': c[1], '2': c[2], '3': c[3], '4': c[4] };
+        const s = span(ny) ?? [Math.round(cx - rx), 0];
+        stampItem('body', pack, Math.max(0, s[0] - 3), Math.min(H - pack.length, Math.max(0, ny - 4)), colMap, true);
+      }
     }
-    if (items.head === 'phones') {
+
+    const neck = def(items.neck);
+    if (items.neck === 'scarf') drawScarf({ style: 'stripe', c: ['#cf3a4a', '#ff6f62', '#7e1f3a', '#ffd166'] });
+    else if (neck?.kind === 'band' && neck.p) {
+      const p = neck.p;
+      if (p.style === 'stripe' || p.style === 'knit' || p.style === 'plain') drawScarf(p);
+      else drawBand(p);
+    } else if (neck && hasMap(neck)) stampItem('neck', neck.map, cx - neck.map[0].length / 2, ny, neck.cols, !!neck.day);
+
+    function drawScarf(p: ItemParams) {
+      const [a, b, dark, tassel] = p.c;
+      begin('neck');
+      for (const y of [ny, ny + 1])
+        for (let x = 0; x < W; x++) {
+          if (!nearBody(x, y)) continue;
+          const on = p.pat
+            ? patternOn(p.pat, x - Math.round(cx), y - ny)
+            : p.style === 'stripe'
+              ? (x >> 1) % 2
+              : p.style === 'knit'
+                ? (x + y) % 2
+                : 0;
+          paint(x, y, y === ny + 1 && !p.pat ? dark : on ? a : b);
+        }
+      const sx = Math.round(cx - rx * 0.35);
+      for (let y = ny + 2; y <= ny + 4; y++) for (const x of [sx, sx + 1]) if (inb(x, y)) paint(x, y, y === ny + 4 ? tassel : a);
+    }
+    function drawBand(p: ItemParams) {
+      const [a, b, dark] = p.c;
+      begin('neck');
+      const icx = Math.round(cx);
+      if (p.style === 'bandana') {
+        for (let x = 0; x < W; x++) if (nearBody(x, ny)) paint(x, ny, dark);
+        for (let j = 1; j <= 4; j++)
+          for (let x = icx - 4 + j; x <= icx + 4 - j; x++) paint(x, ny + j, j === 4 ? dark : (x + j) % 3 === 0 ? b : a, true);
+      } else if (p.style === 'lanyard') {
+        for (const s of [-1, 1]) {
+          const x0 = Math.round(cx + s * rx * 0.45) - (s > 0 ? 1 : 0);
+          for (let j = 0; j < 3; j++) paint(Math.round(x0 + ((icx - x0) * j) / 3), ny + j, a);
+        }
+        stampItem('neck', ['.k.', 'bbb', 'bwb', 'bbb'], icx - 1, ny + 2, { k: dark, b, w: '#fff2dc' }, true);
+      } else if (p.style === 'beads') {
+        for (let x = 0; x < W; x++) if (nearBody(x, ny) && x % 2 === 0) paint(x, ny, a);
+        stampItem('neck', ['.a.', 'aba', '.d.'], icx - 1, ny + 1, { a: b, b: '#fff2dc', d: dark }, true);
+      } else {
+        // collar: a turned-down polo collar
+        for (const y of [ny, ny + 1]) for (let x = 0; x < W; x++) if (nearBody(x, y)) paint(x, y, y === ny ? a : b);
+        for (const x of [icx - 2, icx - 1, icx, icx + 1]) paint(x, ny + 2, x === icx - 1 || x === icx ? dark : b);
+      }
+    }
+
+    const held = def(items.held);
+    if (held && hasMap(held) && st > 0) {
+      const x0 = Math.min(W - held.map[0].length, Math.round(cx + rx - 3)),
+        y0 = Math.round(cy + ry * 0.3) - held.map.length + 3;
+      stampItem('held', held.map, x0, y0, held.cols, true);
+    }
+
+    const head = def(items.head);
+    if (items.head === 'phones') drawPhones({ style: 'cans', c: ['#4f7fe0', '#cf3a4a', '#ff6f62', '#7e1f3a'] });
+    else if (head?.kind === 'phones' && head.p) drawPhones(head.p);
+    else if (head && hasMap(head)) {
+      const m = head.anim && pose.phase ? head.anim : head.map;
+      const w = m[0].length,
+        y0 = Math.max(0, headTop + 2 - m.length);
+      stampItem('head', m, cx - w / 2, y0, head.cols, true);
+    }
+    function drawPhones(p: ItemParams) {
+      const [band, cup, light, dark] = p.c;
+      begin('head');
       const R = ry + 0.6;
       for (let y = 0; y < H; y++)
         for (let x = 0; x < W; x++) {
           const dx = x + 0.5 - cx,
             dy = y + 0.5 - cy,
             d = Math.sqrt((dx * dx) / ((rx + 0.8) * (rx + 0.8)) + (dy * dy) / (R * R));
-          if (d >= 1 && d < 1 + 1.4 / R && dy < -ry * 0.35) {
-            const q = y * W + x;
-            grp[q] = GR.ITEM;
-            icol[q] = '#4f7fe0';
-          }
+          if (d >= 1 && d < 1 + 1.4 / R && dy < -ry * 0.35) paint(x, y, band);
+        }
+      if (p.style === 'cat')
+        for (const s of [-1, 1]) {
+          const ex = Math.round(cx + s * rx * 0.5) - (s > 0 ? 1 : 0);
+          let by = 0;
+          while (by < H - 1 && !(grp[by * W + ex] === GR.ITEM && islot[by * W + ex] === cur)) by++;
+          stampItem('head', ['.c.', 'ccc'], ex - 1, by - 2, { c: light }, true);
         }
       for (const s of [-1, 1]) {
         const x0 = s < 0 ? Math.round(cx - rx - 1.2) : Math.round(cx + rx - 1.8);
         for (let y = eyeY - 2; y <= eyeY + 2; y++)
-          for (let x = x0; x < x0 + 3; x++)
-            if (inb(x, y)) {
-              const q = y * W + x;
-              grp[q] = GR.ITEM;
-              icol[q] = y === eyeY - 2 || y === eyeY + 2 ? '#7e1f3a' : x === x0 + 1 ? '#ff6f62' : '#cf3a4a';
-              edge[q] = 1;
-            }
+          for (let x = x0; x < x0 + 3; x++) paint(x, y, y === eyeY - 2 || y === eyeY + 2 ? dark : x === x0 + 1 ? light : cup, true);
       }
-    } else {
-      const it = items.head ? ITEMS[items.head] : undefined;
-      if (it && hasMap(it)) {
-        const m = it.anim && pose.phase ? it.anim : it.map;
-        const w = m[0].length,
-          x0 = Math.round(cx - w / 2),
-          y0 = headTop + 2 - m.length;
-        stamp(m, x0, y0, it.cols);
-        markEdge(x0, y0, m);
+      if (p.style === 'mic') {
+        const x0 = Math.round(cx - rx - 1.2) + 1,
+          y0 = eyeY + 3,
+          x1 = Math.round(cx) - 3,
+          y1 = mouthY + 1;
+        const n = Math.max(1, Math.abs(x1 - x0));
+        for (let k = 0; k <= n; k++)
+          paint(Math.round(x0 + ((x1 - x0) * k) / n), Math.round(y0 + ((y1 - y0) * k) / n), k === n ? dark : band, true);
       }
     }
   }
@@ -754,6 +1047,8 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
       if (grp[q] < 1 || grp[q] > 3) continue;
       if ((x > 0 && edge[q - 1]) || (x < W - 1 && edge[q + 1]) || (y > 0 && edge[q - W]) || (y < H - 1 && edge[q + W])) grp[q] = GR.LINE;
     }
+  for (let i = 0; i < N; i++) if (grp[i] === GR.ITEM && islot[i]) fit[SLOT_IDS[islot[i] - 1]]!.visible++;
+  if (pose.itemsOnly) for (let i = 0; i < N; i++) if (grp[i] !== GR.ITEM) grp[i] = GR.NONE;
 
   const bR = RAMPS[g.pal[0]],
     aR = RAMPS[g.pal[1]];
@@ -814,7 +1109,7 @@ export function compose(g: SpriteGenome, pose: Pose = {}): { cols: Px[]; meta: S
     }
   if (pose.flash) for (let i = 0; i < N; i++) if (out[i] && out[i] !== INK) out[i] = '#ffffff';
   if (pose.sil) for (let i = 0; i < N; i++) if (out[i]) out[i] = pose.sil;
-  return { cols: out, meta: { cx, cy, rx, ry, eyeY, headTop } };
+  return { cols: out, meta: { cx, cy, rx, ry, eyeY, headTop, items: fit } };
 }
 
 export function outlineCols(cols: Px[], w: number, h: number): Px[] {
@@ -850,10 +1145,63 @@ export function mapCols(map: string[], colMap: Record<string, string>, pad = 1) 
   return { cols: pad ? outlineCols(cols, w, h) : cols, w, h };
 }
 
-export function itemIconCols(id: string) {
-  const it = ITEMS[id];
-  const src: IconDef = hasMap(it) ? it : ICONS[id];
-  return mapCols(src.map, src.cols);
+/** A plain stand-in body that parametric items are drawn on, for their icons and for the distinctness check. */
+export const MANNEQUIN: SpriteGenome = {
+  shape: 'round',
+  rx: 8.6,
+  ry: 8.4,
+  n: 2.3,
+  ears: 'none',
+  tail: 'none',
+  eyes: 'round',
+  mouth: 'smile',
+  pattern: 'none',
+  feet: true,
+  arms: true,
+  blush: false,
+  flop: false,
+  pal: ['frost', 'sky'],
+  belly: 'light',
+  seed: 1,
+};
+
+/** Crop a sprite to its filled pixels. */
+export function cropCols(cols: Px[], w: number, h: number) {
+  let x0 = w,
+    y0 = h,
+    x1 = -1,
+    y1 = -1;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (cols[y * w + x]) {
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y);
+        y1 = Math.max(y1, y);
+      }
+  if (x1 < 0) return { cols: [] as Px[], w: 0, h: 0 };
+  const cw = x1 - x0 + 1,
+    ch = y1 - y0 + 1;
+  const out: Px[] = new Array(cw * ch).fill(null);
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) out[y * cw + x] = cols[(y + y0) * w + x + x0];
+  return { cols: out, w: cw, h: ch };
+}
+
+/** An item as it looks when worn on the mannequin, alone, outlined and cropped. */
+export function itemWornCols(d: ItemDef) {
+  const items: Record<string, string | null> = noItems();
+  items[d.slot] = '_';
+  const { cols } = compose({ ...MANNEQUIN, items, gear: { _: d } }, { stage: 1, itemsOnly: true });
+  return cropCols(cols, 32, 32);
+}
+
+/** The shop and wardrobe icon: the item's own pixel map, or for drawn items how it looks worn. */
+export function itemIconCols(id: string, d?: ItemDef) {
+  const it = d ?? ITEMS[id];
+  if (!it) return { cols: [] as Px[], w: 0, h: 0 };
+  if (hasMap(it)) return mapCols(it.map, it.cols);
+  if (!it.kind && ICONS[id]) return mapCols(ICONS[id].map, ICONS[id].cols);
+  return itemWornCols(it);
 }
 
 /** Egg sprite in the creature's own palette (the hint before the reveal). */

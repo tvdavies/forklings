@@ -30,7 +30,7 @@ export const RNAME: Record<string, string> = {
   moss: 'Moss',
   gold: 'Gold',
 };
-const PAIRS = [
+export const PAIRS = [
   ['peach', 'mint'],
   ['lilac', 'butter'],
   ['sky', 'gum'],
@@ -202,7 +202,7 @@ export function genome(seedHex: string): Genome {
     g.base.hp += 1;
     g.base.atk += 1;
   }
-  g.items = { head: null, face: null, neck: null, held: null };
+  g.items = { head: null, face: null, neck: null, body: null, held: null };
   return g;
 }
 
