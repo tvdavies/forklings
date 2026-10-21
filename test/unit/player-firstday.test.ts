@@ -54,7 +54,7 @@ describe('PlayerDO first-day checklist', () => {
   let db: Database;
   beforeEach(async () => {
     ({ p, db } = makePlayer());
-    await p.init('demo:abc', 'pip', false);
+    await p.init('gh:101', 'pip');
     await p.hatch('salt', T0);
   });
 
@@ -121,7 +121,7 @@ describe('PlayerDO first-day checklist', () => {
 
   test('house NPCs never get a list or a reward', async () => {
     const { p: npc } = makePlayer();
-    await npc.init('npc:npc-carl', 'npc-carl', false);
+    await npc.init('npc:npc-carl', 'npc-carl');
     await npc.setupNpc('salt', T0, 200, { head: 'cap' }, {}, T0);
     await npc.care('feed', T0 + 1000);
     await npc.setTactics({}, T0 + 2000);
