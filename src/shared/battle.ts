@@ -12,7 +12,6 @@ export { compileTactics, DEFAULT_TACTICS, sanitiseTactics } from './strategy';
 export interface Snapshot {
   pid: string;
   handle: string;
-  verified: boolean;
   bot: boolean;
   seed: string;
   stage: number;
