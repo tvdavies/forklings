@@ -2,9 +2,9 @@
 // Workers Static Assets; everything under /api and /auth comes here first.
 
 import type { Snapshot } from '../shared/battle';
-import { makeBot } from '../shared/bots';
 import { genome } from '../shared/genome';
 import { isRecord, prop } from '../shared/json';
+import { isOnboarding, LEVEL_RANGE, ONBOARDING_BATTLES, pickOpponent } from '../shared/matchmaking';
 import { NPC_ROSTER, npcPid } from '../shared/npcs';
 import { sha256Hex } from '../shared/rng';
 import type { CareAction } from '../shared/state';
@@ -60,7 +60,7 @@ const readJson = async (r: Request | Response): Promise<JsonBody> => {
 // D1 rows read in this file.
 type TokenAuthRow = { id: string; pid: string; handle: string; verified: number };
 type HandleRow = { pid: string; verified: number };
-type RatingRow = { rating: number };
+type RatingRow = { rating: number; started: number };
 type PoolRow = { pid: string; snapshot: string; rating: number };
 type NpcRow = { pid: string; handle: string };
 
@@ -206,6 +206,8 @@ async function githubCallback(req: Request, env: Env) {
  * level, not themselves, and not anyone they fought in the last 6 hours either way.
  * Unranked players (demo logins, GitHub accounts under 30 days) meet NPCs and house
  * bots, and their battles never move a rating. With nobody suitable, a house bot steps in.
+ * A player's first three battles are gentler (src/shared/matchmaking.ts): a tutorial bot first,
+ * then only NPCs at their level or lower, or a bot at their XP.
  */
 async function runBattle(
   env: Env,
@@ -219,27 +221,32 @@ async function runBattle(
   const now = Date.now();
   // A practice battle is always unranked and always against an NPC (or a bot).
   const ranked = !opts.practice && (await isRanked(env, who.pid, now));
-  const myRow = await env.DB.prepare('SELECT rating FROM players WHERE pid = ?').bind(who.pid).first<RatingRow>();
-  const eligible = ranked ? rankedSql(env).replace('?', '?2') : npcsOn(env) ? '(npc = 1 AND ?2 = ?2)' : '(0 AND ?2 = ?2)';
+  // Battles this player started before, counted up to the onboarding limit.
+  const myRow = await env.DB.prepare(
+    'SELECT rating, (SELECT COUNT(*) FROM (SELECT 1 FROM battles WHERE challenger = ?1 LIMIT ?2)) AS started FROM players WHERE pid = ?1',
+  )
+    .bind(who.pid, ONBOARDING_BATTLES)
+    .first<RatingRow>();
+  const started = myRow?.started ?? 0;
+  const onboard = !who.pid.startsWith('npc:');
+  const gentle = onboard && isOnboarding(started);
+  // Onboarding: house NPCs only, at the player's level or lower. Otherwise: anyone eligible within three levels.
+  const npcOnly = npcsOn(env) ? '(npc = 1 AND ?2 = ?2)' : '(0 AND ?2 = ?2)';
+  const eligible = ranked && !gentle ? rankedSql(env).replace('?', '?2') : npcOnly;
+  const levelSql = gentle ? 'level <= ?3' : `ABS(level - ?3) <= ${LEVEL_RANGE}`;
   const pool = await env.DB.prepare(`
     SELECT pid, snapshot, rating FROM players
     WHERE has_creature = 1 AND pid != ?1 AND snapshot IS NOT NULL AND ${eligible}
-      AND ABS(level - ?3) <= 3 AND updated_at > ?4
+      AND ${levelSql} AND updated_at > ?4
       AND pid NOT IN (SELECT defender FROM battles WHERE challenger = ?1 AND at > ?5)
       AND pid NOT IN (SELECT challenger FROM battles WHERE defender = ?1 AND at > ?5)
     ORDER BY ABS(rating - ?6) LIMIT 6`)
     .bind(who.pid, now - RANKED_MIN_ACCOUNT_AGE_MS, snapA.level, now - 14 * 86400e3, now - PAIR_COOLDOWN_MS, myRow?.rating ?? 1000)
     .all<PoolRow>();
-  const rows = pool.results || [];
+  const rows = (pool.results || []).map((r) => JSON.parse(r.snapshot) as Snapshot);
   const id = crypto.randomUUID();
   const seed = await sha256Hex(`battle|${id}|${who.pid}|${now}`);
-  let snapB: Snapshot;
-  if (rows.length && parseInt(seed.slice(8, 10), 16) < 200) {
-    const pick = rows[parseInt(seed.slice(10, 14), 16) % rows.length];
-    snapB = { ...(JSON.parse(pick.snapshot) as Snapshot), bot: false };
-  } else {
-    snapB = makeBot(await sha256Hex(`bot|${seed}`), snapA.xp ?? 0);
-  }
+  const snapB = pickOpponent({ me: snapA, started, pool: rows, seed, botSeed: await sha256Hex(`bot|${seed}`), onboard });
   const battle = env.BATTLE.get(env.BATTLE.idFromName(id));
   return { ok: true, out: await battle.run(id, snapA, snapB, seed, ranked) };
 }
