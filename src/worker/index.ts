@@ -4,9 +4,11 @@ import type { Env } from './env';
 import { cookie, getCookie, randomToken, Session, sha256b64, signSession, verifySession, SESSION_DAYS } from './auth';
 import { sha256Hex } from '../shared/rng';
 import { makeBot } from '../shared/bots';
+import { genome } from '../shared/genome';
 import type { Snapshot } from '../shared/battle';
 import { NPC_ROSTER, npcPid } from '../shared/npcs';
 import type { CareAction } from '../shared/state';
+import { handleMcp } from './mcp';
 export { PlayerDO } from './player';
 export { BattleDO } from './battle';
 
@@ -135,13 +137,14 @@ async function githubCallback(req: Request, env: Env) {
  * Unranked players (demo logins, GitHub accounts under 30 days) meet NPCs and house
  * bots, and their battles never move a rating. With nobody suitable, a house bot steps in.
  */
-async function runBattle(env: Env, who: { pid: string; h: string; v: boolean }): Promise<{ ok: true; out: any } | { ok: false; error: string }> {
+async function runBattle(env: Env, who: { pid: string; h: string; v: boolean }, opts: { practice?: boolean } = {}): Promise<{ ok: true; out: any } | { ok: false; error: string }> {
   const me = await player(env, who);
   const prep = await me.prepareBattle();
   if (!prep.ok) return { ok: false, error: prep.error! };
   const snapA = prep.snapshot!;
   const now = Date.now();
-  const ranked = await isRanked(env, who.pid, now);
+  // A practice battle is always unranked and always against an NPC (or a bot).
+  const ranked = !opts.practice && (await isRanked(env, who.pid, now));
   const myRow = await env.DB.prepare('SELECT rating FROM players WHERE pid = ?').bind(who.pid).first<any>();
   const eligible = ranked ? rankedSql(env).replace('?', '?2') : npcsOn(env) ? '(npc = 1 AND ?2 = ?2)' : '(0 AND ?2 = ?2)';
   const pool = await env.DB.prepare(`
@@ -222,6 +225,27 @@ async function createToken(body: any, env: Env, a: Auth) {
   return json({ id, name, token, note: 'Shown once. Store it somewhere safe.' });
 }
 
+/** One or two short lines for terminal status bars, e.g. the Claude Code plugin's status line. */
+function statusLine(v: any): string {
+  const c = v.creature;
+  if (!c) return 'forkling: not hatched yet, visit forklings.dev\n';
+  const s = c.state, r = (n: number) => Math.round(n);
+  const FACES: Record<string, string> = { napping: '(-.-)zz', hungry: '(o_o)', sleepy: '(=_=)', delighted: '(^o^)', content: '(^-^)', grumpy: '(>_<)', sulking: '(;_;)' };
+  const face = FACES[c.mood] ?? '(^-^)';
+  const warn = c.evolving ? ' · ready to evolve!' : '';
+  return `${face} ${genome(c.seed).name} is ${c.mood}${warn}\n   food ${r(s.fullness)}% · mood ${r(s.mood)}% · energy ${r(s.energy)}% · Lv ${c.level}\n`;
+}
+
+// ---------- MCP ----------
+async function mcp(req: Request, env: Env) {
+  // Personal API tokens only: no cookies, so a web page can't drive the MCP endpoint.
+  const a = req.headers.get('authorization')?.startsWith('Bearer ') ? await authenticate(req, env) : null;
+  if (!a) return handleMcp(req, env, null);
+  const who = { pid: a.s.pid, h: a.s.h, v: a.s.v };
+  const me = await player(env, who);
+  return handleMcp(req, env, { player: me, handle: a.s.h, practiceBattle: () => runBattle(env, who, { practice: true }) });
+}
+
 // ---------- router ----------
 async function api(req: Request, env: Env, url: URL): Promise<Response> {
   const p = url.pathname, m = req.method;
@@ -244,6 +268,8 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
   const me = await player(env, a.s);
   const body = m === 'POST' ? await req.json<any>().catch(() => ({})) : {};
   switch (true) {
+    case p === '/api/status-line' && m === 'GET':
+      return new Response(statusLine(await me.view()), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
     case p === '/api/me' && m === 'GET':
       return json({ session: { handle: a.s.h, verified: a.s.v, pid: a.s.pid }, ...(await me.view()) });
     case p === '/api/hatch' && m === 'POST': {
@@ -261,6 +287,10 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     case p === '/api/tactics' && m === 'POST': {
       const r = await me.setTactics(body.tactics ?? body);
       return r.ok ? json(r) : err(409, r.error!);
+    }
+    case p === '/api/script' && m === 'POST': {
+      const r = await me.setScript(body.script);
+      return r.ok ? json(r) : json({ error: r.error, line: r.line, col: r.col }, 409);
     }
     case p === '/api/evolve' && m === 'POST':
       return json({ ...(await me.ackEvolution()), ...(await me.view()) });
@@ -291,6 +321,7 @@ export default {
     const url = new URL(req.url);
     try {
       if (url.pathname.startsWith('/api/')) return await api(req, env, url);
+      if (url.pathname === '/mcp') return await mcp(req, env);
       if (url.pathname === '/auth/demo' && req.method === 'POST') return await demoLogin(req, env);
       if (url.pathname === '/auth/github') return await githubStart(req, env);
       if (url.pathname === '/auth/github/callback') return await githubCallback(req, env);

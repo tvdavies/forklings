@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "forklings": {
+      "type": "http",
+      "url": "https://forklings.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.forklings_token}"
+      }
+    }
+  }
+}

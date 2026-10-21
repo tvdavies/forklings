@@ -1,0 +1,22 @@
+{
+  "name": "forklings",
+  "displayName": "Forklings",
+  "version": "1.0.0",
+  "description": "Check on, care for and coach your Forkling from Claude Code",
+  "author": {
+    "name": "Tom Davies"
+  },
+  "homepage": "https://forklings.dev",
+  "repository": "https://github.com/tvdavies/forklings",
+  "license": "MIT",
+  "keywords": ["game", "virtual-pet", "mcp"],
+  "userConfig": {
+    "forklings_token": {
+      "type": "string",
+      "title": "Forklings API token",
+      "description": "Create one at https://forklings.dev under API (it starts with fk_). Revoke it there any time.",
+      "sensitive": true,
+      "required": true
+    }
+  }
+}

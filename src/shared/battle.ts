@@ -3,7 +3,7 @@
 import { genome, TYPES, Genome } from './genome';
 import { mulberry, seedToInt } from './rng';
 import { ITEMS, ITEM_IDS } from './compose';
-import { compileTactics, decide, Strategy, Tactics } from './strategy';
+import { compileTactics, decide, sanitiseStrategy, Strategy, Tactics } from './strategy';
 
 export { DEFAULT_TACTICS, sanitiseTactics, compileTactics } from './strategy';
 export type { Tactics, Strategy } from './strategy';
@@ -15,7 +15,9 @@ export interface Snapshot {
 }
 
 /** The strategy a snapshot fights with: an explicit (script) strategy, else its compiled tactics. */
-export function strategyOf(s: Snapshot): Strategy { return s.strategy ?? compileTactics(s.tactics); }
+export function strategyOf(s: Snapshot): Strategy {
+  return (s.strategy && sanitiseStrategy(s.strategy)) || compileTactics(s.tactics);
+}
 
 /** Held items give a small battle edge, capped at 6% of one stat. Other slots are cosmetic. */
 export const HELD_EFFECTS: Record<string, { stat: 'atk' | 'def' | 'spd' | 'hp'; pct: number; label: string }> = {

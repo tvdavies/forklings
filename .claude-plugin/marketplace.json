@@ -1,0 +1,14 @@
+{
+  "name": "forklings",
+  "description": "Forklings, the pixel pet that lives in your terminal",
+  "owner": {
+    "name": "Tom Davies"
+  },
+  "plugins": [
+    {
+      "name": "forklings",
+      "source": "./plugins/forklings",
+      "description": "Check on, care for and coach your Forkling from Claude Code"
+    }
+  ]
+}

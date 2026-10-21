@@ -5,14 +5,18 @@ import type { Env } from './env';
 import { genome } from '../shared/genome';
 import { hatchSeed, hatchTimeIso } from '../shared/rng';
 import { advance, care, CareAction, COOLDOWNS, levelForXp, newState, PetState, stageForXp, moodWord, nextStageXp } from '../shared/state';
-import { DEFAULT_TACTICS, sanitiseTactics, Snapshot, Tactics, BattleResult } from '../shared/battle';
+import { DEFAULT_TACTICS, sanitiseTactics, Snapshot, Tactics, BattleResult, compileTactics } from '../shared/battle';
+import type { Strategy } from '../shared/strategy';
+import { parseScript, ScriptError, formatStrategy } from '../shared/script';
 import { ITEMS } from '../shared/compose';
 
 const STARTER_ITEMS = ['beanie', 'glasses', 'mug'];
 export const BATTLE_ENERGY = 15;
 export const BATTLE_COOLDOWN_MS = 15 * 1000;
 
-interface Creature { seed: string; hatchedAt: string; handle: string; state: PetState; items: Record<string, string | null>; tactics: Tactics }
+// A creature fights with its tactics, unless the player has written a script; then
+// `script` holds the source as typed and `strategy` the compiled rules.
+interface Creature { seed: string; hatchedAt: string; handle: string; state: PetState; items: Record<string, string | null>; tactics: Tactics; script?: string | null; strategy?: Strategy | null }
 
 export class PlayerDO extends DurableObject<Env> {
   sql: SqlStorage;
@@ -64,6 +68,7 @@ export class PlayerDO extends DurableObject<Env> {
       who,
       creature: {
         seed: c.seed, hatchedAt: c.hatchedAt, handle: c.handle, items: c.items, tactics: c.tactics,
+        strategy: this.strategyView(c),
         state: c.state, level: levelForXp(c.state.xp), stage: c.state.stage, mood: moodWord(c.state, now),
         nextStageXp: nextStageXp(c.state.stage),
         evolving: trueStage > c.state.stage ? { from: c.state.stage, to: c.state.stage + 1 } : null,
@@ -113,11 +118,28 @@ export class PlayerDO extends DurableObject<Env> {
     return { ok: true };
   }
 
+  /** Coaching tactics. Setting them replaces any script. */
   async setTactics(t: unknown, now = Date.now()) {
     const c = this.advanced(now); if (!c) return { ok: false, error: 'Hatch first.' };
-    c.tactics = sanitiseTactics(t); this.set('creature', c);
+    c.tactics = sanitiseTactics(t); c.script = null; c.strategy = null; this.set('creature', c);
     await this.publish(now);
-    return { ok: true, tactics: c.tactics };
+    return { ok: true, tactics: c.tactics, strategy: this.strategyView(c) };
+  }
+
+  /** A strategy script, parsed and validated here whatever the client: web, API or MCP. */
+  async setScript(src: unknown, now = Date.now()) {
+    const c = this.advanced(now); if (!c) return { ok: false, error: 'Hatch first.' };
+    if (typeof src !== 'string') return { ok: false, error: 'The script must be text.' };
+    try { c.strategy = parseScript(src); }
+    catch (e) { if (e instanceof ScriptError) return { ok: false, error: e.message, line: e.line, col: e.col }; throw e; }
+    c.script = src; this.set('creature', c);
+    await this.publish(now);
+    return { ok: true, strategy: this.strategyView(c) };
+  }
+
+  private strategyView(c: Creature) {
+    const compiled = c.strategy ?? compileTactics(c.tactics);
+    return { source: c.strategy ? 'script' : 'tactics', script: c.script ?? formatStrategy(compiled), rules: compiled.rules.length, style: compiled.style };
   }
 
   /**
@@ -146,7 +168,7 @@ export class PlayerDO extends DurableObject<Env> {
 
   snapshotOf(c: Creature): Snapshot {
     const who = this.get<any>('who');
-    return { pid: who.pid, handle: who.handle, verified: !!who.verified, bot: false, seed: c.seed, stage: c.state.stage, level: levelForXp(c.state.xp), xp: Math.floor(c.state.xp), items: c.items, tactics: c.tactics };
+    return { pid: who.pid, handle: who.handle, verified: !!who.verified, bot: false, seed: c.seed, stage: c.state.stage, level: levelForXp(c.state.xp), xp: Math.floor(c.state.xp), items: c.items, tactics: c.tactics, ...(c.strategy ? { strategy: c.strategy } : {}) };
   }
 
   /** Challenger side: check and spend energy, return the snapshot to fight with. */
