@@ -70,7 +70,7 @@ export const CLASSICS: Record<string, { level: number; price: number }> = {
   beanie: { level: 1, price: 40 },
   glasses: { level: 1, price: 40 },
   mug: { level: 1, price: 60 },
-  scarf: { level: 2, price: 45 },
+  scarf: { level: 1, price: 45 },
   bowtie: { level: 3, price: 80 },
   party: { level: 3, price: 80 },
   phones: { level: 5, price: 90 },
@@ -126,6 +126,19 @@ export function checkPurchase(o: { level: number; price: number }, me: { level: 
     return { ok: false, code: 'funds', error: `You need ${short} more ${short === 1 ? CURRENCY.one : CURRENCY.many}.` };
   }
   return { ok: true };
+}
+
+/**
+ * What a house NPC buys today, if anything: the cheapest new or returning cosmetic it can
+ * buy. Never a held item (NPC battle strength stays as tuned) and never a classic.
+ */
+export function npcPick(offers: Offer[], me: { level: number; bits: number; owns: (id: string) => boolean }): Offer | null {
+  return (
+    offers
+      .filter((o) => o.def.slot !== 'held' && o.tag !== 'classic')
+      .filter((o) => checkPurchase(o, { level: me.level, bits: me.bits, owned: me.owns(o.id) }).ok)
+      .sort((a, b) => a.price - b.price || a.id.localeCompare(b.id))[0] ?? null
+  );
 }
 
 /** A battle's bits for one side, before the daily taper. */

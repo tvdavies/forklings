@@ -767,6 +767,11 @@ export function generateDay(seed: number, day: string, existing: Existing[]): { 
       break;
     }
   });
+  // Something new a brand-new Forkling can buy: the first common of the night opens at level 1.
+  if (!items.some((i) => i.level <= 1)) {
+    const c = items.find((i) => i.def.rarity === 0);
+    if (c) c.level = 1;
+  }
   return { items, rejected };
 }
 

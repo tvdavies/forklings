@@ -28,10 +28,11 @@ const err = (status: number, message: string) => json({ error: message }, status
 
 const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 /** The nightly shop restock (must match wrangler.jsonc). Everything else on the cron is the NPC tick. */
-export const SHOP_CRON = '5 0 * * *';
+const SHOP_CRON = '5 0 * * *';
 const DEMO_SIGNUPS_PER_IP_PER_DAY = 5;
 const PAIR_COOLDOWN_MS = 6 * 3600 * 1000;
-export const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
+// Not exported: workerd refuses a Worker entry module that exports anything but handlers and classes.
+const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
 // SQL for "may play ranked": a verified GitHub player whose account is at least 30 days
 // old, or a house NPC while NPCs are on. Takes one parameter: the account-age cutoff.
 const rankedSql = (env: Env) => `(${npcsOn(env) ? 'npc = 1 OR ' : ''}(verified = 1 AND gh_created_at IS NOT NULL AND gh_created_at <= ?))`;

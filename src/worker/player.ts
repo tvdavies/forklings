@@ -3,7 +3,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { type BattleResult, compileTactics, DEFAULT_TACTICS, type Snapshot, sanitiseTactics, type Tactics } from '../shared/battle';
 import { ITEMS, type ItemDef, isSlot, noItems, type Slot } from '../shared/compose';
-import { checkPurchase, type Offer, REWARDS } from '../shared/economy';
+import { npcPick, type Offer, REWARDS } from '../shared/economy';
 import { genome } from '../shared/genome';
 import { hatchSeed, hatchTimeIso } from '../shared/rng';
 import { formatStrategy, parseScript, ScriptError } from '../shared/script';
@@ -583,12 +583,7 @@ export class PlayerDO extends DurableObject<Env> {
     const c = this.advanced(now);
     if (!c || !this.isNpc()) return null;
     this.ensureWallet(c, now);
-    const level = levelForXp(c.state.xp);
-    const bits = this.wallet.balance();
-    const pick = offers
-      .filter((o) => o.def.slot !== 'held' && o.tag !== 'classic')
-      .filter((o) => checkPurchase(o, { level, bits, owned: this.owns(o.id) }).ok)
-      .sort((a, b) => a.price - b.price || a.id.localeCompare(b.id))[0];
+    const pick = npcPick(offers, { level: levelForXp(c.state.xp), bits: this.wallet.balance(), owns: (id) => this.owns(id) });
     if (!pick) return null;
     const r = await this.buy(pick, `npc-${pick.id}`, now);
     if (!r.ok) return null;
