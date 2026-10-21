@@ -41,11 +41,11 @@ MCP clients ────┘  /api /auth /mcp    │    script, battle log, repla
 
 A battle is `simulate(seed, snapshotA, snapshotB)`. Snapshots carry stats, gear and strategy. The same inputs always give the same turns, so a replay is just the seed and two snapshots. The browser re-runs it for the animation.
 
-1. The Worker picks an opponent from D1: a ranked player near your rating, an NPC or a house bot.
+1. The Worker picks an opponent from D1: a ranked player near your rating, an NPC or a house bot. A player's first three battles are gentler (`src/shared/matchmaking.ts`): first a tutorial bot at your XP that guards on turn 2, then only NPCs at your level or lower, or a bot at your XP.
 2. A fresh `BattleDO` takes snapshots from both `PlayerDO`s, simulates, applies XP, loot and ratings to each side, and writes one `battles` row, two `battle_sides` rows and one `battle_moves` row per move used.
 3. `sim_version` is stored with each battle, so the analytics stay comparable when the rules change.
 
-**Ranked play** needs a verified GitHub identity whose account is at least 30 days old (`gh_created_at`, captured at sign-in). Both sides must be eligible for a ranked match. NPCs count as eligible, so the ladder has opponents from day one. Demo and newer accounts fight NPCs and bots without a rating, and the leaderboard lists them separately.
+**Ranked play** needs a verified GitHub identity whose account is at least 30 days old (`gh_created_at`, captured at sign-in). Both sides must be eligible for a ranked match. NPCs count as eligible, so the ladder has opponents from day one. Demo and newer accounts fight NPCs and bots without a rating, and the leaderboard lists them separately as the practice bracket. It lists NPCs apart from players too, and pins the viewer's own place at the top (`me` in `/api/leaderboard`, from `src/worker/leaderboard.ts`).
 
 **Held items** are the only gear that affects battles: one slot, at most +6% to one stat. Head, face and neck items are cosmetic.
 

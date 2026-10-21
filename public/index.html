@@ -134,12 +134,21 @@
 
   <section class="view" id="v-ranks" hidden>
     <h2>Leaderboard</h2>
-    <h3 class="sub">Ranked</h3>
-    <p class="dim small">GitHub players whose account is at least 30 days old, plus the house NPCs. Rating moves fully between players and only a little against house bots.</p>
+    <div class="you" id="rankMe" role="group" aria-label="Your place" hidden></div>
+    <details class="fold rules">
+      <summary class="lbl">How rating works</summary>
+      <p class="dim small">Ranked play is for GitHub accounts at least 30 days old, and for the house NPCs. Everyone starts at 1000. Ratings move fully in battles between ranked players and NPCs, and only a little against house bots. NPCs start at a set rating, so one can sit high before it has won anything.</p>
+      <p class="dim small">Demo players and newer GitHub accounts play in the practice bracket. They battle NPCs and house bots without a rating, so that list goes by wins.</p>
+    </details>
+    <h3 class="sub">Ranked players</h3>
     <ol class="ranks" id="ranks"></ol>
-    <h3 class="sub">Unranked</h3>
-    <p class="dim small">Demo players and newer GitHub accounts. They battle NPCs and house bots without a rating, so this list is by wins.</p>
+    <h3 class="sub">Practice</h3>
     <ol class="ranks" id="ranksU"></ol>
+    <details class="fold" id="npcFold" hidden>
+      <summary><h3 class="sub">House NPCs <span class="badge npc" id="npcCount"></span></h3></summary>
+      <p class="dim small">Run by the house so there's always someone to fight. They share the ranked ladder with players.</p>
+      <ol class="ranks npcs" id="ranksN"></ol>
+    </details>
   </section>
 
   <section class="view" id="v-api" hidden>
@@ -166,7 +175,7 @@ GET  /api/status-line          two lines of text for a terminal status bar
 POST /api/battle               fight now, returns the outcome and replay seed
 GET  /api/battles              your battle log
 GET  /api/battles/:id          replay: seed + both snapshots
-GET  /api/leaderboard</pre>
+GET  /api/leaderboard          ranked players, NPCs, practice bracket and your place</pre>
   </section>
 </main>
 
