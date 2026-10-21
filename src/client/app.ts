@@ -1,17 +1,19 @@
 // Forklings web client: a small hash-routed PWA over the JSON API.
 
-import { type BattleResult, fighter, HELD_EFFECTS, MOVES, type Snapshot, type Tactics } from '../shared/battle';
+import { type BattleResult, fighter, HELD_EFFECTS, MOVES, type Snapshot, strongAgainst, type Tactics, TYPE_EDGE } from '../shared/battle';
 import { ITEMS, SLOTS } from '../shared/compose';
+import { FIRST_DAY_STEPS, type FirstDayStep, type FirstDayView } from '../shared/firstday';
 import { describe, type Genome, genome, RARITY, RCOL, STAGE_NAMES } from '../shared/genome';
-import { advance, type PetState, STAGE_XP } from '../shared/state';
+import { advance, HUNGRY_BELOW, type PetState, STAGE_XP, TIRED_BELOW } from '../shared/state';
 import { battleVerdict } from '../shared/verdict';
 import { itemIcon, paintStatic, RM, spr } from './engine';
+import { makeMeadow } from './meadow';
 import { makeBattle, makeEvo, makeHatch, makeHome } from './scenes';
+import { copyPicture, hatchPicture } from './share';
 
 // ---------- API shapes (the fields of the Worker's JSON responses that the client reads) ----------
 interface Session {
   handle: string;
-  verified: boolean;
   pid: string;
 }
 interface CreatureView {
@@ -39,13 +41,10 @@ interface PlayerView {
   creature: CreatureView | null;
   inventory: { item: string }[];
   unseenDefences: number;
+  firstDay?: FirstDayView | null;
 }
 interface Me extends PlayerView {
   session: Session;
-}
-interface Config {
-  github: boolean;
-  demo: boolean;
 }
 interface CareResponse extends Partial<PlayerView> {
   ok?: boolean;
@@ -84,7 +83,6 @@ interface ReplayResponse {
 }
 interface LeaderRow {
   handle: string;
-  verified: number;
   npc: number;
   persona: string | null;
   name: string;
@@ -98,8 +96,7 @@ interface LeaderRow {
   xp: number;
 }
 /** The viewer's own row; see MyPlace in src/worker/leaderboard.ts. */
-type MyPlace = LeaderRow &
-  ({ ranked: true; rank: number; of: number } | { ranked: false; reason: 'github' | 'age'; rankedAt: number | null });
+type MyPlace = LeaderRow & ({ ranked: true; rank: number; of: number } | { ranked: false; rankedAt: number | null });
 interface LeaderboardResponse {
   players: LeaderRow[];
   npcs: LeaderRow[];
@@ -167,10 +164,12 @@ interface AppState {
   me: Me | null;
   g: Genome | null;
   view: string | null;
-  config: Config | null;
+  /** Why the sign-in page is showing, if it isn't a plain first visit: see SIGN_IN_MESSAGES. */
+  signInReason: string | null;
 }
-const S: AppState = { me: null, g: null, view: null, config: null };
+const S: AppState = { me: null, g: null, view: null, signInReason: null };
 let homeStage: ReturnType<typeof makeHome> | undefined;
+let meadow: ReturnType<typeof makeMeadow> | undefined;
 let battleStage: ReturnType<typeof makeBattle>;
 
 function petGenome(c: CreatureView): Genome {
@@ -183,6 +182,7 @@ function petGenome(c: CreatureView): Genome {
 // ---------- routing ----------
 const VIEWS = ['login', 'hatch', 'home', 'coach', 'battle', 'ranks', 'api'];
 function show(v: string) {
+  const from = S.view;
   // Picking a tab from the keyboard moves focus to the new screen, not back to the top of the page.
   const fromTabs = S.view !== v && !!document.activeElement?.closest('#tabs');
   S.view = v;
@@ -192,7 +192,14 @@ function show(v: string) {
   $('tabs').hidden = !authed || !S.me?.creature;
   for (const a of document.querySelectorAll<HTMLAnchorElement>('.tabs a'))
     a.setAttribute('aria-current', a.dataset.tab === v ? 'page' : 'false');
+  if (v === 'login') renderSignIn();
   if (v === 'home') renderHome();
+  // Coach and other clients can tick first-day steps without returning the player view.
+  if (v === 'home' && from && from !== 'home' && S.me?.firstDay && !S.me.firstDay.complete)
+    refresh().then(
+      () => S.view === 'home' && renderHome(),
+      () => {},
+    );
   if (v === 'coach') renderCoach();
   if (v === 'battle') renderBattleLog();
   if (v === 'ranks') renderRanks();
@@ -219,55 +226,69 @@ async function refresh() {
   try {
     S.me = await api<Me>('/api/me');
   } catch (e) {
-    if ((e as ApiError).status === 401) S.me = null;
-    else throw e;
+    const err = e as ApiError;
+    if (err.status !== 401) throw e;
+    S.me = null;
+    // The Worker says so when it had to clear a session cookie that no longer works.
+    if ((err.body as { ended?: boolean } | null)?.ended) S.signInReason ??= 'ended';
   }
   if (S.me?.creature) S.g = petGenome(S.me.creature);
-  if (S.me) {
-    $('whoHandle').textContent = `@${S.me.session.handle}`;
-    const b = $('whoBadge');
-    b.textContent = S.me.session.verified ? 'GitHub' : 'unverified';
-    b.className = `badge${S.me.session.verified ? '' : ' warn'}`;
-  }
+  if (S.me) $('whoHandle').textContent = `@${S.me.session.handle}`;
   $('battleDot').hidden = !((S.me?.unseenDefences ?? 0) > 0);
 }
 
-// ---------- login ----------
-async function initLogin() {
+// ---------- sign-in ----------
+// Reasons the Worker sends back from GitHub (/?signin=<reason>), plus 'ended' from /api/me.
+// When the API doesn't answer at all, boot() shows its retry panel instead.
+const SIGN_IN_MESSAGES: Record<string, string> = {
+  denied: 'Sign-in was cancelled on GitHub, so nothing was shared. Sign in whenever you like.',
+  expired: 'That sign-in took too long or started in another tab. Start again here.',
+  failed: "GitHub couldn't confirm who you are. Try signing in again.",
+  unavailable: "Forklings couldn't reach GitHub just now. Try again in a minute.",
+  unconfigured: "GitHub sign-in isn't set up on this server yet.",
+  ended: 'Your session has ended. Sign in with GitHub to carry on.',
+};
+
+function renderSignIn() {
+  const msg = $('signinMsg');
+  const text = S.signInReason ? (SIGN_IN_MESSAGES[S.signInReason] ?? SIGN_IN_MESSAGES.failed) : '';
+  msg.textContent = text;
+  msg.hidden = !text;
+  if (!meadow) meadow = makeMeadow($<HTMLCanvasElement>('meadowCanvas'));
+}
+
+function initSignIn() {
+  // Read the reason GitHub's callback sent us back with, then tidy it out of the address bar.
+  const url = new URL(location.href);
+  const reason = url.searchParams.get('signin');
+  if (reason) {
+    S.signInReason = reason;
+    url.searchParams.delete('signin');
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }
+  const gh = $('ghBtn');
+  // The Forklings look over at the button: left of the meadow on wide screens, below it on phones.
+  const towards = () => (window.matchMedia('(max-width: 860px)').matches ? 0 : -1);
+  gh.addEventListener('pointerenter', () => meadow?.excite(towards()));
+  gh.addEventListener('focus', () => meadow?.excite(towards()));
+  gh.addEventListener('pointerleave', () => meadow?.calm());
+  gh.addEventListener('blur', () => meadow?.calm());
   $('logoutBtn').addEventListener('click', async () => {
     await api('/auth/logout', { body: {} });
     S.me = null;
     S.g = null;
+    S.signInReason = null;
     location.hash = '';
     route();
-  });
-  S.config = await api<Config>('/api/config');
-  const gh = $<HTMLButtonElement>('ghBtn');
-  if (!S.config.github) {
-    gh.disabled = true;
-    $('ghNote').textContent = 'GitHub login is coming soon (it needs an OAuth app). Use the demo login below for now.';
-  }
-  gh.addEventListener('click', () => {
-    location.href = '/auth/github';
-  });
-  if (!S.config.demo) $('demoForm').hidden = true;
-  $('demoForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    $('demoErr').textContent = '';
-    try {
-      await api('/auth/demo', { body: { handle: $<HTMLInputElement>('demoHandle').value } });
-      await refresh();
-      route();
-    } catch (err) {
-      $('demoErr').textContent = errMsg(err);
-    }
   });
 }
 
 // ---------- hatch ----------
+/** One line on what a type means in battle, such as "Markup type: hits Data types 15% harder". */
+const typeLine = (type: string) => `${type} type: hits ${strongAgainst(type)} types ${Math.round((TYPE_EDGE - 1) * 100)}% harder`;
 function cardHTML(g: Genome) {
-  return `<div class="rowc"><span class="nm">${esc(g.name)}</span><span class="stars" title="${RARITY[g.rarity]}" style="color:${RCOL[g.rarity]}">${'★'.repeat(g.rarity + 1)}${'☆'.repeat(4 - g.rarity)}</span></div>
-  <div class="rowc"><span class="whoc">Hatched by @${esc(S.me!.session.handle)}</span><span class="whoc">${RARITY[g.rarity]} ${g.type} type</span></div><div class="traits">${esc(describe(g))}</div>`;
+  return `<div class="rowc"><span class="nm">${esc(g.name)}</span><span class="rarity" style="--rc:${RCOL[g.rarity]}">${RARITY[g.rarity]} <span aria-hidden="true">${'★'.repeat(g.rarity + 1)}</span></span></div>
+  <div class="typeline">${typeLine(g.type)}</div><div class="whoc">Hatched by @${esc(S.me!.session.handle)}</div><div class="traits">${esc(describe(g))}</div>`;
 }
 function initHatch() {
   // Before hatching, the egg is a neutral placeholder: the real seed doesn't exist until you press Hatch.
@@ -276,10 +297,23 @@ function initHatch() {
   const hatchStage = makeHatch($<HTMLCanvasElement>('hatchCanvas'), {
     g: placeholder,
     onHatched: (g) => {
+      $('hatchTitle').textContent = `Meet ${g.name}`;
       $('hatchCard').innerHTML = cardHTML(g);
       $('hatchCard').classList.add('show');
       $('meetBtn').hidden = false;
+      $('copyPic').hidden = false;
     },
+  });
+  $('hatchInfo').addEventListener('click', () => {
+    const open = $('hatchWhy').hidden;
+    $('hatchWhy').hidden = !open;
+    $('hatchInfo').setAttribute('aria-expanded', String(open));
+  });
+  $('copyPic').addEventListener('click', async () => {
+    const g = S.g!;
+    const how = await copyPicture(hatchPicture(g, S.me!.session.handle, typeLine(g.type)), `${g.name}.png`).catch(() => null);
+    $('hatchMsg').textContent =
+      how === 'copied' ? 'Copied. Paste it anywhere.' : how === 'saved' ? `Saved as ${g.name}.png` : "Couldn't make the picture.";
   });
   $('hatchBtn').addEventListener('click', async () => {
     $<HTMLButtonElement>('hatchBtn').disabled = true;
@@ -307,6 +341,9 @@ const STAT_DEF: ['fullness' | 'mood' | 'energy', string, string][] = [
   ['mood', 'Mood', '#ff86bd'],
   ['energy', 'Energy', '#86bdff'],
 ];
+/** A need bar below this turns coral. */
+const LOW_NEED = 25;
+const CORAL = '#ff6f62';
 function renderHome() {
   const c = S.me?.creature;
   if (!c) return;
@@ -319,20 +356,112 @@ function renderHome() {
   $('petStars').style.color = RCOL[g.rarity];
   $('petStars').title = RARITY[g.rarity];
   $('petMeta').textContent = `Lv ${c.level} ${STAGE_NAMES[c.stage]} · ${g.type} type · ${c.mood}`;
+  renderNeedChips(c.state, napping);
   $('napBtn').textContent = napping ? 'Wake' : 'Nap';
   const xpNext = c.nextStageXp,
     xp = Math.floor(c.state.xp),
     prev = STAGE_XP[c.stage];
   const growth = xpNext ? Math.max(0, Math.min(100, ((xp - prev) / (xpNext - prev)) * 100)) : 100;
   $('stats').innerHTML =
-    STAT_DEF.map(
-      ([k, label, col]) =>
-        `<div class="stat"><span>${label}</span><div class="bar"><i style="width:${Math.round(c.state[k])}%;background-color:${col}"></i></div><span class="v">${Math.round(c.state[k])}</span></div>`,
-    ).join('') +
+    STAT_DEF.map(([k, label, col]) => {
+      const v = Math.round(c.state[k]),
+        low = c.state[k] < LOW_NEED;
+      return `<div class="stat${low ? ' low' : ''}"><span>${label}</span><div class="bar"><i style="width:${v}%;background-color:${low ? CORAL : col}"></i></div><span class="v">${v}${low ? '<span class="visually-hidden"> (low)</span>' : ''}</span></div>`;
+    }).join('') +
     `<div class="stat"><span>Growth</span><div class="bar"><i style="width:${growth}%;background-color:#6fdc9c"></i></div><span class="v">${xp}</span></div>` +
     `<p class="statnote">${xpNext ? `${Math.max(0, xpNext - xp)} XP until it evolves into a ${STAGE_NAMES[c.stage + 1]}.` : 'Fully evolved. A Prime.'} Needs change over time, even while you're away.</p>`;
   renderWardrobe();
+  renderFirstDay();
   if (c.evolving) startEvolution();
+}
+
+/** "Hungry" and "Tired" chips by the name, at the levels where mood starts to suffer. Re-rendered only when they change, so they pop in once. */
+function renderNeedChips(s: PetState, napping: boolean) {
+  const chips = [s.fullness < HUNGRY_BELOW ? 'Hungry' : '', !napping && s.energy < TIRED_BELOW ? 'Tired' : ''].filter(Boolean);
+  const el = $('petChips');
+  const key = chips.join(',');
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML = chips.map((t) => `<span class="chip">${t}</span>`).join('');
+}
+
+// ---------- first day ----------
+const FIRST_DAY_COPY: Record<FirstDayStep, { label: string; next: string }> = {
+  feed: { label: 'Feed it', next: 'Tap Feed. A fed, happy Forkling keeps growing while you’re away.' },
+  dress: { label: 'Put something on', next: 'Pick something from the wardrobe. A held item gives a small battle edge.' },
+  plan: { label: 'Set a plan', next: 'Open Coach and save a plan. Your Forkling fights that way, even while you’re away.' },
+  win: { label: 'Win a battle', next: 'Find a battle. If you lose, try a different plan in Coach.' },
+};
+/** Steps ticked as of the last render, so a newly ticked one gets its burst. Null before the first render. */
+let fdShown: Set<FirstDayStep> | null = null;
+
+function firstDayGo(step: FirstDayStep) {
+  if (step === 'feed') document.querySelector<HTMLButtonElement>('[data-care=feed]')?.click();
+  if (step === 'dress') {
+    $('wardrobe').scrollIntoView({ behavior: RM ? 'auto' : 'smooth', block: 'center' });
+    $('wardrobe')
+      .querySelector<HTMLButtonElement>('.item:not(.locked)[aria-pressed=false]:not(:first-child)')
+      ?.focus({ preventScroll: true });
+  }
+  if (step === 'plan') location.hash = '#coach';
+  if (step === 'win') location.hash = '#battle';
+}
+
+async function closeFirstDay() {
+  try {
+    const r = await api<PlayerView>('/api/first-day/close', { body: {} });
+    S.me = { ...S.me!, ...r };
+  } catch {
+    S.me = { ...S.me!, firstDay: null };
+  }
+  renderHome();
+}
+
+function renderFirstDay() {
+  const fd = S.me?.firstDay,
+    el = $('firstDay');
+  el.hidden = !fd;
+  // Rebuild only when something changed, so the minute-by-minute refresh doesn't steal focus.
+  const key = fd ? JSON.stringify(fd) : '';
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  if (!fd) return;
+  const ticked = new Set(FIRST_DAY_STEPS.filter((s) => fd.steps[s]));
+  const fresh = (s: FirstDayStep) => fdShown !== null && ticked.has(s) && !fdShown.has(s);
+  const name = esc(S.g!.name);
+  if (fd.complete) {
+    const it = fd.reward ? ITEMS[fd.reward] : undefined;
+    el.innerHTML = `<div class="fd-head"><h3 id="fdTitle">First day done!</h3></div>
+      <div class="fd-reward${fdShown && fdShown.size < FIRST_DAY_STEPS.length ? ' just' : ''}">${it ? '<span class="fd-gift"><canvas aria-hidden="true"></canvas></span>' : ''}
+      <p>${it ? `${name} found a <b>${esc(it.name)}</b> for you. It’s in the wardrobe.` : `${name} had a great first day.`}</p></div>
+      <div class="row">${it ? '<button class="btn" type="button" data-fd-wear>Wear it</button>' : ''}<button class="btn ghost" type="button" data-fd-close>${it ? 'Later' : 'Close'}</button></div>`;
+    if (it) paintStatic(el.querySelector('canvas')!, itemIcon(fd.reward!), 44);
+    el.querySelector('[data-fd-wear]')?.addEventListener('click', async () => {
+      try {
+        const r = await api<PlayerView>('/api/equip', { body: { slot: it!.slot, item: fd.reward } });
+        S.me = { ...S.me!, ...r };
+        S.g = petGenome(S.me.creature!);
+        homeStage?.react('equip');
+      } catch (e) {
+        homeStage?.say(errMsg(e), false);
+      }
+      await closeFirstDay();
+    });
+  } else {
+    const next = FIRST_DAY_STEPS.find((s) => !ticked.has(s))!;
+    el.innerHTML = `<div class="fd-head"><h3 id="fdTitle">First day</h3><span class="fd-count">${ticked.size} of ${FIRST_DAY_STEPS.length}</span>
+      <button class="fd-close" type="button" data-fd-close aria-label="Hide the first-day list">×</button></div>
+      <ol class="fd-steps">${FIRST_DAY_STEPS.map((s) =>
+        ticked.has(s)
+          ? `<li class="done${fresh(s) ? ' just' : ''}"><span class="fd-box" aria-hidden="true"></span><span><span class="visually-hidden">Done: </span>${FIRST_DAY_COPY[s].label}</span></li>`
+          : `<li><button type="button" data-fd-go="${s}"><span class="fd-box" aria-hidden="true"></span>${FIRST_DAY_COPY[s].label}</button></li>`,
+      ).join('')}</ol>
+      <p class="fd-next">${FIRST_DAY_COPY[next].next}</p>`;
+    for (const b of el.querySelectorAll<HTMLElement>('[data-fd-go]'))
+      b.addEventListener('click', () => firstDayGo(b.dataset.fdGo as FirstDayStep));
+  }
+  el.querySelector('[data-fd-close]')?.addEventListener('click', closeFirstDay);
+  fdShown = ticked;
 }
 
 function renderWardrobe() {
@@ -379,6 +508,7 @@ function renderWardrobe() {
           homeStage!.react('equip');
         } catch (e) {
           $('careMsg').textContent = errMsg(e);
+          homeStage?.say(errMsg(e), false);
         }
       });
       opts.appendChild(b);
@@ -392,7 +522,9 @@ function initCare() {
     b.addEventListener('click', async () => {
       const action = b.dataset.care!;
       const r = await api<CareResponse>('/api/care', { body: { action }, soft: true });
-      $('careMsg').textContent = (r.message || r.error || '') + (r.xpGain ? `  +${r.xpGain} XP` : '');
+      const said = (r.message || r.error || '') + (r.xpGain ? `  +${r.xpGain}\u00a0XP` : '');
+      $('careMsg').textContent = said;
+      homeStage?.say(said, !!r.ok);
       if (r.creature) {
         S.me = { ...S.me!, ...r };
         S.g = petGenome(S.me.creature!);
@@ -415,9 +547,9 @@ function startEvolution() {
   const before = fighter({ seed: c.seed, stage: from, level: c.level, tactics: c.tactics, items: c.items } as Snapshot),
     after = fighter({ seed: c.seed, stage: to, level: c.level, tactics: c.tactics, items: c.items } as Snapshot);
   const chips: [string, string][] = [
+    [`${S.g!.name} is now a ${STAGE_NAMES[to]}`, '#ffd166'],
     [`+${after.maxHp - before.maxHp} HP`, '#6fdc9c'],
     [`+${Math.round(after.atk - before.atk)} Attack`, '#ff6f62'],
-    [`Now a ${STAGE_NAMES[to]}`, '#ffd166'],
   ];
   // A modal moment: the page behind can't be reached until the player closes it.
   const back = document.activeElement as HTMLElement | null;
@@ -531,7 +663,7 @@ function sayLine() {
 }
 let fighting = false;
 let battleReadyAt = 0; // the server keeps a short gap between battles
-const oppTag = (s: Snapshot) => (s.bot ? ' (house bot)' : s.pid.startsWith('npc:') ? ' (NPC)' : s.verified ? '' : ' (unverified)');
+const oppTag = (s: Snapshot) => (s.bot ? ' (house bot)' : s.pid.startsWith('npc:') ? ' (NPC)' : '');
 
 /** Energy now (needs drift between reads), and whether the pet can fight or should rest at Home first. */
 function fightReadiness(c: CreatureView) {
@@ -740,13 +872,7 @@ async function renderBattleLog() {
 // ---------- leaderboard ----------
 /** A row's name, handle line and score cells (everything after the sprite). */
 function rankCells(p: LeaderRow, ranked: boolean, badge = true) {
-  const tag = !badge
-    ? ''
-    : p.npc
-      ? `<span class="badge npc" title="House NPC: ${esc(p.persona || '')}">NPC</span>`
-      : p.verified
-        ? ''
-        : '<span class="badge warn">unverified</span>';
+  const tag = badge && p.npc ? `<span class="badge npc" title="House NPC: ${esc(p.persona || '')}">NPC</span>` : '';
   return `<div><div class="nm">${esc(p.name)}</div><div class="hd">@${esc(p.handle)} ${tag} · Lv ${p.level} ${STAGE_NAMES[p.stage]}</div></div>
     <div><div class="rt">${ranked ? p.rating : `${p.wins}W`}</div><div class="wl">${ranked ? `${p.wins}W ${p.losses}L${p.draws ? ` ${p.draws}D` : ''}` : `${p.losses}L · ${p.xp} XP`}</div></div>`;
 }
@@ -776,7 +902,6 @@ function renderMyPlace(me: MyPlace | null) {
   if (!me) return;
   let status: string;
   if (me.ranked) status = `#${me.rank} of ${me.of} ranked ${me.of === 1 ? 'player' : 'players'}`;
-  else if (me.reason === 'github') status = 'Unranked: GitHub account needed';
   else if (me.rankedAt === null) status = 'Practice: ranked play opens when your GitHub account is 30 days old';
   else {
     const days = Math.max(1, Math.ceil((me.rankedAt - Date.now()) / 86400e3));
@@ -874,7 +999,6 @@ setInterval(async () => {
 // ---------- boot ----------
 // index.html paints a loader before this script runs. boot() swaps it for the app once /api answers,
 // or for a retry panel if it doesn't; Try again runs boot() again without reloading the page.
-let loginReady = false;
 async function boot() {
   bootState('loading');
   try {
@@ -882,13 +1006,6 @@ async function boot() {
   } catch {
     bootState('error');
     return;
-  }
-  // Set up the login view once the API answers, so a failed first try doesn't leave it half set up.
-  if (!loginReady) {
-    loginReady = true;
-    await initLogin().catch(() => {
-      $('demoErr').textContent = "Couldn't reach Forklings. Check your connection and reload.";
-    });
   }
   $('boot').hidden = true;
   route();
@@ -922,6 +1039,7 @@ $('bootRetry').addEventListener('click', () => {
   initCoach();
   initBattle();
   initTokens();
+  initSignIn();
   await boot();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 })();

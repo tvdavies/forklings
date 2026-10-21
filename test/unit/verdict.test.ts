@@ -7,7 +7,6 @@ import { battleVerdict } from '../../src/shared/verdict';
 const snap = async (name: string, over: Partial<Snapshot> = {}): Promise<Snapshot> => ({
   pid: `p:${name}`,
   handle: name,
-  verified: false,
   bot: false,
   seed: await sha256Hex(`creature|${name}`),
   stage: 1,

@@ -9,10 +9,11 @@ import { isOnboarding, LEVEL_RANGE, ONBOARDING_BATTLES, pickOpponent } from '../
 import { NPC_ROSTER, npcPid } from '../shared/npcs';
 import { sha256Hex } from '../shared/rng';
 import type { CareAction } from '../shared/state';
-import { cookie, getCookie, randomToken, SESSION_DAYS, type Session, sha256b64, signSession, verifySession } from './auth';
+import { cookie, getCookie, isGithubPid, randomToken, SESSION_DAYS, type Session, sha256b64, signSession, verifySession } from './auth';
 import type { BattleOutcome } from './battle';
 import { D1KV } from './d1kv';
 import type { Env } from './env';
+import { githubConfigured, githubIdentity, type SignInError } from './github';
 import { leaderboard } from './leaderboard';
 import { handleMcp, portrait } from './mcp';
 import {
@@ -41,8 +42,6 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
   });
 const err = (status: number, message: string) => json({ error: message }, status);
 
-const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
-const DEMO_SIGNUPS_PER_IP_PER_DAY = 5;
 const PAIR_COOLDOWN_MS = 6 * 3600 * 1000;
 // Not exported: workerd rejects entry-module exports that aren't handlers or classes.
 const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
@@ -50,16 +49,21 @@ const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
 // old, or a house NPC while NPCs are on. Takes one parameter: the account-age cutoff.
 const rankedSql = (env: Env) => `(${npcsOn(env) ? 'npc = 1 OR ' : ''}(verified = 1 AND gh_created_at IS NOT NULL AND gh_created_at <= ?))`;
 const npcsOn = (env: Env) => env.NPCS !== 'off';
-const visibleSql = (env: Env) => (npcsOn(env) ? '1 = 1' : 'npc = 0');
+// SQL for "shown on the leaderboard": GitHub players, plus the house NPCs while they're on.
+// Rows left over from retired sign-in methods (verified = 0, not an NPC) stay hidden.
+const visibleSql = (env: Env) => (npcsOn(env) ? '(verified = 1 OR npc = 1)' : '(verified = 1 AND npc = 0)');
 
 const origin = (req: Request, env: Env) => publicOrigin(env, req);
 const isSecure = (req: Request) => new URL(req.url).protocol === 'https:';
 
 type PlayerStub = DurableObjectStub<PlayerDO>;
 
-async function player(env: Env, s: { pid: string; h: string; v: boolean }): Promise<PlayerStub> {
+/** Someone who can own a Forkling: a signed-in GitHub player or a house NPC. */
+type Who = { pid: string; h: string };
+
+async function player(env: Env, s: Who): Promise<PlayerStub> {
   const stub = env.PLAYER.get(env.PLAYER.idFromName(s.pid));
-  await stub.init(s.pid, s.h, s.v);
+  await stub.init(s.pid, s.h);
   return stub;
 }
 
@@ -74,9 +78,8 @@ const readJson = async (r: Request | Response): Promise<JsonBody> => {
 };
 
 // D1 rows read in this file.
-type TokenAuthRow = { id: string; pid: string; handle: string; verified: number };
-type PlayerRow = { handle: string; verified: number };
-type HandleRow = { pid: string; verified: number };
+type TokenAuthRow = { id: string; pid: string; handle: string };
+type PlayerRow = { handle: string };
 type RatingRow = { rating: number; started: number };
 type PoolRow = { pid: string; snapshot: string; rating: number };
 type NpcRow = { pid: string; handle: string };
@@ -85,15 +88,18 @@ type Auth = { s: Session; via: 'cookie' | 'token' };
 
 const LAST_USED_GRANULARITY_MS = 10 * 60 * 1000;
 
-/** Check a personal `fk_` token. Its last-used time is written at most every 10 minutes. */
+/**
+ * Check a personal `fk_` token. Its last-used time is written at most every 10 minutes.
+ * Tokens only work for GitHub players; any left over from retired accounts are refused.
+ */
 async function personalToken(env: Env, tok: string): Promise<TokenAuthRow | null> {
   if (!tok.startsWith('fk_')) return null;
   const row = await env.DB.prepare(
-    'SELECT t.id, t.pid, p.handle, p.verified FROM api_tokens t JOIN players p ON p.pid = t.pid WHERE t.hash = ?',
+    'SELECT t.id, t.pid, p.handle FROM api_tokens t JOIN players p ON p.pid = t.pid WHERE t.hash = ? AND p.verified = 1',
   )
     .bind(await sha256b64(tok))
     .first<TokenAuthRow>();
-  if (!row) return null;
+  if (!row || !isGithubPid(row.pid)) return null;
   const now = Date.now();
   await env.DB.prepare('UPDATE api_tokens SET last_used = ? WHERE id = ? AND (last_used IS NULL OR last_used < ?)')
     .bind(now, row.id, now - LAST_USED_GRANULARITY_MS)
@@ -106,22 +112,18 @@ async function authenticate(req: Request, env: Env): Promise<Auth | null> {
   if (authz?.startsWith('Bearer ')) {
     // The JSON API takes personal tokens only. OAuth access tokens are for /mcp.
     const row = await personalToken(env, authz.slice(7).trim());
-    return row ? { s: { pid: row.pid, h: row.handle, v: !!row.verified, exp: Date.now() + 60000 }, via: 'token' } : null;
+    return row ? { s: { pid: row.pid, h: row.handle, exp: Date.now() + 60000 }, via: 'token' } : null;
   }
   const s = await verifySession(env, getCookie(req, 'fk_session'));
   return s ? { s, via: 'cookie' } : null;
 }
 
-async function ensurePlayerRow(
-  env: Env,
-  s: { pid: string; h: string; v: boolean },
-  ipHash: string | null,
-  ghCreatedAt: number | null = null,
-) {
+/** Create or refresh a GitHub player's directory row at sign-in. */
+async function ensurePlayerRow(env: Env, s: Who, ghCreatedAt: number | null) {
   await env.DB.prepare(
-    'INSERT INTO players (pid, handle, verified, created_at, ip_hash, updated_at, gh_created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(pid) DO UPDATE SET handle = excluded.handle, verified = excluded.verified, gh_created_at = COALESCE(excluded.gh_created_at, players.gh_created_at)',
+    'INSERT INTO players (pid, handle, verified, created_at, updated_at, gh_created_at) VALUES (?, ?, 1, ?, ?, ?) ON CONFLICT(pid) DO UPDATE SET handle = excluded.handle, verified = 1, gh_created_at = COALESCE(excluded.gh_created_at, players.gh_created_at)',
   )
-    .bind(s.pid, s.h, s.v ? 1 : 0, Date.now(), ipHash, Date.now(), ghCreatedAt)
+    .bind(s.pid, s.h, Date.now(), Date.now(), ghCreatedAt)
     .run();
 }
 
@@ -131,50 +133,29 @@ async function isRanked(env: Env, pid: string, now: number): Promise<boolean> {
     .first('ok'));
 }
 
-async function ipHash(req: Request, env: Env) {
-  const ip = req.headers.get('cf-connecting-ip') || 'local';
-  return (await sha256Hex(`ip|${ip}|${env.SESSION_SECRET}`)).slice(0, 24);
-}
-
-async function startSession(req: Request, env: Env, s: { pid: string; h: string; v: boolean }, redirect?: string) {
-  const token = await signSession(env, { ...s, exp: Date.now() + SESSION_DAYS * 86400e3 });
-  const headers = { 'set-cookie': cookie('fk_session', token, SESSION_DAYS * 86400, isSecure(req)) };
-  if (redirect) return new Response(null, { status: 302, headers: { ...headers, location: redirect } });
-  return json({ ok: true, handle: s.h, verified: s.v }, 200, headers);
-}
-
 // ---------- auth routes ----------
-async function demoLogin(req: Request, env: Env) {
-  if (env.DEMO_LOGIN === 'off') return err(403, 'Demo login is switched off.');
-  const body = await readJson(req);
-  const handle = String(body.handle || '')
-    .trim()
-    .replace(/^@/, '')
-    .toLowerCase();
-  if (!HANDLE_RE.test(handle)) return err(400, 'Pick a handle: letters, numbers and dashes, up to 39 characters.');
-  const ih = await ipHash(req, env);
-  const day = new Date().toISOString().slice(0, 10);
-  const taken = await env.DB.prepare('SELECT pid, verified FROM players WHERE handle = ? LIMIT 1').bind(handle).first<HandleRow>();
-  if (taken)
-    return err(
-      409,
-      taken.verified ? 'That handle belongs to a verified GitHub player.' : 'Someone already picked that demo handle. Try another.',
-    );
-  const used =
-    (await env.DB.prepare('SELECT count FROM demo_signups WHERE ip_hash = ? AND day = ?').bind(ih, day).first<number>('count')) ?? 0;
-  if (used >= DEMO_SIGNUPS_PER_IP_PER_DAY) return err(429, "That's enough demo Forklings from here for today.");
-  await env.DB.prepare(
-    'INSERT INTO demo_signups (ip_hash, day, count) VALUES (?, ?, 1) ON CONFLICT(ip_hash, day) DO UPDATE SET count = count + 1',
-  )
-    .bind(ih, day)
-    .run();
-  const s = { pid: `demo:${randomToken(9)}`, h: handle, v: false };
-  await ensurePlayerRow(env, s, ih);
-  return startSession(req, env, s);
+// GitHub is the only way in. Every failure on the way back from GitHub lands on the
+// sign-in page with a short reason code; the page turns it into a friendly message.
+const clearOauth = (req: Request) => cookie('fk_oauth', '', 0, isSecure(req));
+const clearNext = (req: Request) => cookie('fk_next', '', 0, isSecure(req));
+
+function signInError(req: Request, reason: SignInError) {
+  const headers = new Headers({ location: `/?signin=${reason}`, 'cache-control': 'no-store' });
+  headers.append('set-cookie', clearOauth(req));
+  if (getCookie(req, 'fk_next')) headers.append('set-cookie', clearNext(req));
+  return new Response(null, { status: 302, headers });
 }
 
-async function githubStart(req: Request, env: Env) {
-  if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return err(503, "GitHub login isn't configured yet.");
+async function startSession(req: Request, env: Env, s: Who, location: string) {
+  const token = await signSession(env, { pid: s.pid, h: s.h, exp: Date.now() + SESSION_DAYS * 86400e3 });
+  const headers = new Headers({ location, 'cache-control': 'no-store' });
+  headers.append('set-cookie', cookie('fk_session', token, SESSION_DAYS * 86400, isSecure(req)));
+  headers.append('set-cookie', clearOauth(req));
+  return new Response(null, { status: 302, headers });
+}
+
+function githubStart(req: Request, env: Env) {
+  if (!env.GITHUB_CLIENT_ID || !githubConfigured(env)) return signInError(req, 'unconfigured');
   // Signing in to connect an MCP client returns to that client's /authorize page afterwards.
   const next = new URL(req.url).searchParams.get('next');
   const state = randomToken(18);
@@ -184,50 +165,27 @@ async function githubStart(req: Request, env: Env) {
   u.searchParams.set('state', state);
   u.searchParams.set('allow_signup', 'true');
   // No scopes: identity only, public profile. Forklings never reads repos or activity.
-  const headers = new Headers({ location: u.toString() });
+  const headers = new Headers({ location: u.toString(), 'cache-control': 'no-store' });
   headers.append('set-cookie', cookie('fk_oauth', state, 600, isSecure(req)));
   if (isAuthorizeReturn(next)) headers.append('set-cookie', cookie('fk_next', next, 600, isSecure(req)));
   return new Response(null, { status: 302, headers });
 }
 
 async function githubCallback(req: Request, env: Env) {
-  if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return err(503, "GitHub login isn't configured yet.");
-  const url = new URL(req.url);
-  const code = url.searchParams.get('code'),
-    state = url.searchParams.get('state');
-  if (!code || !state || state !== getCookie(req, 'fk_oauth')) return err(400, 'Login expired or state mismatch. Try again.');
-  const tr = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({
-      client_id: env.GITHUB_CLIENT_ID,
-      client_secret: env.GITHUB_CLIENT_SECRET,
-      code,
-      redirect_uri: `${origin(req, env)}/auth/github/callback`,
-    }),
-  });
-  const tj = await readJson(tr);
-  if (!tj.access_token) return err(502, "GitHub didn't accept the login.");
-  const ur = await fetch('https://api.github.com/user', {
-    headers: { authorization: `Bearer ${tj.access_token}`, 'user-agent': 'forklings.dev', accept: 'application/vnd.github+json' },
-  });
-  const user: unknown = await ur.json<unknown>().catch(() => ({}));
-  const userId = prop(user, 'id'),
-    login = prop(user, 'login');
-  if (!userId || !login) return err(502, "Couldn't read your GitHub identity.");
-  // The access token is dropped here: identity only, never stored.
-  const s = { pid: `gh:${userId}`, h: String(login).toLowerCase(), v: true };
-  // Store the account creation date: ranked play needs an account at least 30 days old.
-  // (Date.parse converts its argument to a string anyway; String() just makes that explicit.)
-  const created = Date.parse(String(prop(user, 'created_at')));
-  await ensurePlayerRow(env, s, null, Number.isFinite(created) ? created : null);
-  // A demo player who picked this handle loses it to the verified owner.
-  await env.DB.prepare("UPDATE players SET handle = handle || '-demo' WHERE handle = ? AND verified = 0").bind(s.h).run();
-  const next = getCookie(req, 'fk_next');
-  const res = await startSession(req, env, s, isAuthorizeReturn(next) ? next : '/');
-  res.headers.append('set-cookie', cookie('fk_oauth', '', 0, isSecure(req)));
-  if (next) res.headers.append('set-cookie', cookie('fk_next', '', 0, isSecure(req)));
-  return res;
+  try {
+    const r = await githubIdentity(req, env, `${origin(req, env)}/auth/github/callback`);
+    if (!r.ok) return signInError(req, r.reason);
+    const who = { pid: r.pid, h: r.handle };
+    await ensurePlayerRow(env, who, r.createdAt);
+    // Back to the MCP client's /authorize page if that's where sign-in started.
+    const next = getCookie(req, 'fk_next');
+    const res = await startSession(req, env, who, isAuthorizeReturn(next) ? next : '/');
+    if (next) res.headers.append('set-cookie', clearNext(req));
+    return res;
+  } catch (e) {
+    console.error('github sign-in failed', prop(e, 'stack') || e);
+    return signInError(req, 'failed');
+  }
 }
 
 // ---------- battle ----------
@@ -235,14 +193,14 @@ async function githubCallback(req: Request, env: Env) {
  * One battle path for everyone, players and house NPCs alike.
  * Matchmaking: ranked players (and NPCs) meet other ranked players and NPCs close in
  * level, not themselves, and not anyone they fought in the last 6 hours either way.
- * Unranked players (demo logins, GitHub accounts under 30 days) meet NPCs and house
+ * Unranked players (GitHub accounts under 30 days old) meet NPCs and house
  * bots, and their battles never move a rating. With nobody suitable, a house bot steps in.
  * A player's first three battles are gentler (src/shared/matchmaking.ts): a tutorial bot first,
  * then only NPCs at their level or lower, or a bot at their XP.
  */
 async function runBattle(
   env: Env,
-  who: { pid: string; h: string; v: boolean },
+  who: Who,
   opts: { practice?: boolean } = {},
 ): Promise<{ ok: true; out: BattleOutcome } | { ok: false; error: string }> {
   const me = await player(env, who);
@@ -283,7 +241,7 @@ async function runBattle(
 }
 
 async function startBattle(env: Env, a: Auth) {
-  const r = await runBattle(env, { pid: a.s.pid, h: a.s.h, v: a.s.v });
+  const r = await runBattle(env, { pid: a.s.pid, h: a.s.h });
   return r.ok ? json(r.out) : err(409, r.error);
 }
 
@@ -303,7 +261,7 @@ async function seedNpcs(env: Env, now: number) {
     )
       .bind(pid, n.handle, now, now, n.persona, n.rating)
       .run();
-    const stub = await player(env, { pid, h: n.handle, v: false });
+    const stub = await player(env, { pid, h: n.handle });
     await stub.setupNpc(env.HATCH_SALT, NPC_HATCH_EPOCH + i * 3637 * 1000, n.xp, n.items, n.tactics, now);
   }
 }
@@ -314,7 +272,7 @@ async function npcTick(env: Env, now: number) {
   await seedNpcs(env, now);
   const npcs = (await env.DB.prepare('SELECT pid, handle FROM players WHERE npc = 1 AND has_creature = 1').all<NpcRow>()).results || [];
   for (const n of npcs) {
-    const stub = await player(env, { pid: n.pid, h: n.handle, v: false });
+    const stub = await player(env, { pid: n.pid, h: n.handle });
     const v = await stub.view(now);
     const c = v.creature;
     const s = c?.state;
@@ -332,7 +290,7 @@ async function npcTick(env: Env, now: number) {
     .sort((x, y) => x.k - y.k)
     .slice(0, NPC_BATTLES_PER_TICK);
   for (const { n } of order) {
-    const r = await runBattle(env, { pid: n.pid, h: n.handle, v: false });
+    const r = await runBattle(env, { pid: n.pid, h: n.handle });
     if (!r.ok) console.log('npc battle skipped', n.handle, r.error);
   }
 }
@@ -376,9 +334,12 @@ function statusLine(v: PlayerView): string {
  * can't drive it). The handle is read fresh from D1, since it can change after a grant.
  */
 async function mcp(req: Request, env: OAuthEnv, ctx: OAuthResourceContext<McpProps>): Promise<Response> {
-  const row = await env.DB.prepare('SELECT handle, verified FROM players WHERE pid = ?').bind(ctx.props.pid).first<PlayerRow>();
+  // Only GitHub players: a grant left over from a retired account stops working.
+  const row = isGithubPid(ctx.props.pid)
+    ? await env.DB.prepare('SELECT handle FROM players WHERE pid = ? AND verified = 1').bind(ctx.props.pid).first<PlayerRow>()
+    : null;
   if (!row) return err(401, 'This player no longer exists.');
-  const who = { pid: ctx.props.pid, h: row.handle, v: !!row.verified };
+  const who = { pid: ctx.props.pid, h: row.handle };
   const me = await player(env, who);
   return handleMcp(req, env, {
     player: me,
@@ -393,12 +354,12 @@ const servers = oauthServers(mcp, personalToken);
 
 async function sessionOf(req: Request, env: Env): Promise<Signed | null> {
   const s = await verifySession(env, getCookie(req, 'fk_session'));
-  return s ? { pid: s.pid, handle: s.h, verified: s.v } : null;
+  return s ? { pid: s.pid, handle: s.h } : null;
 }
 
 /** The player's Forkling as the consent page shows it. */
 async function forklingCard(env: Env, who: Signed): Promise<ForklingCard | null> {
-  const v = await (await player(env, { pid: who.pid, h: who.handle, v: who.verified })).view();
+  const v = await (await player(env, { pid: who.pid, h: who.handle })).view();
   const c = v.creature;
   if (!c) return null;
   const g = genome(c.seed);
@@ -432,7 +393,7 @@ function oauthRoute(req: Request, env: Env, ctx: ExecutionContext, url: URL): Pr
 async function api(req: Request, env: Env, url: URL): Promise<Response> {
   const p = url.pathname,
     m = req.method;
-  if (p === '/api/config') return json({ github: !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET), demo: env.DEMO_LOGIN !== 'off' });
+  if (p === '/api/config') return json({ github: githubConfigured(env) });
   if (p === '/api/leaderboard') {
     // Public, but a logged-in viewer also gets their own place (`me`).
     const viewer = await authenticate(req, env);
@@ -447,7 +408,14 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     );
   }
   const a = await authenticate(req, env);
-  if (!a) return err(401, 'Not logged in.');
+  if (!a) {
+    // A cookie that no longer verifies (expired, or from a retired account) is cleared, and the
+    // page is told so it can say the session ended rather than show a blank sign-in.
+    if (!getCookie(req, 'fk_session')) return err(401, 'Not signed in.');
+    return json({ error: 'Your session has ended. Sign in again.', ended: true }, 401, {
+      'set-cookie': cookie('fk_session', '', 0, isSecure(req)),
+    });
+  }
   // Cookie-authenticated writes must come from our own pages.
   if (m !== 'GET' && a.via === 'cookie') {
     const o = req.headers.get('origin');
@@ -461,7 +429,7 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
         headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
       });
     case p === '/api/me' && m === 'GET':
-      return json({ session: { handle: a.s.h, verified: a.s.v, pid: a.s.pid }, ...(await me.view()) });
+      return json({ session: { handle: a.s.h, pid: a.s.pid }, ...(await me.view()) });
     case p === '/api/hatch' && m === 'POST': {
       const r = await me.hatch(env.HATCH_SALT);
       return r.ok ? json({ ok: true, ...(await me.view()) }) : err(409, r.error);
@@ -481,6 +449,10 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     case p === '/api/script' && m === 'POST': {
       const r = await me.setScript(body.script);
       return r.ok ? json(r) : json({ error: r.error, line: r.line, col: r.col }, 409);
+    }
+    case p === '/api/first-day/close' && m === 'POST': {
+      const r = await me.closeFirstDay();
+      return r.ok ? json({ ok: true, ...(await me.view()) }) : err(409, r.error);
     }
     case p === '/api/evolve' && m === 'POST':
       return json({ ...(await me.ackEvolution()), ...(await me.view()) });
@@ -534,11 +506,12 @@ export default {
       // Other discovery documents (OpenID Connect, for one) don't exist here; say so in JSON
       // rather than letting the single-page app answer 200 with HTML.
       if (url.pathname.startsWith('/.well-known/')) return err(404, 'Not found.');
-      if (url.pathname === '/auth/demo' && req.method === 'POST') return await demoLogin(req, env);
-      if (url.pathname === '/auth/github') return await githubStart(req, env);
+      if (url.pathname === '/auth/github') return githubStart(req, env);
       if (url.pathname === '/auth/github/callback') return await githubCallback(req, env);
       if (url.pathname === '/auth/logout' && req.method === 'POST')
         return json({ ok: true }, 200, { 'set-cookie': cookie('fk_session', '', 0, isSecure(req)) });
+      // Nothing else lives under /auth, including the retired /auth/demo.
+      if (url.pathname.startsWith('/auth/')) return err(404, 'Not found.');
       return env.ASSETS.fetch(req);
     } catch (e) {
       console.error('request failed', url.pathname, prop(e, 'stack') || e);

@@ -24,7 +24,7 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "forklings-db", "database_id": "16108f11-44aa-4c37-8743-619bfb0dc5b0", "migrations_dir": "migrations" }
   ],
-  "vars": { "PUBLIC_ORIGIN": "https://forklings.dev", "DEMO_LOGIN": "on", "NPCS": "on" },
+  "vars": { "PUBLIC_ORIGIN": "https://forklings.dev", "NPCS": "on" },
   // Caps open OAuth client registration (POST /oauth/register) per client IP; see
   // src/worker/ratelimit.ts. Free, and nothing to create: the binding is the whole setup.
   // namespace_id must be unique in the Cloudflare account, or counters are shared.

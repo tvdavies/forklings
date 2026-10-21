@@ -23,6 +23,8 @@ const MIN_AGE = 30 * DAY;
 // The same conditions as rankedSql() and visibleSql() in src/worker/index.ts.
 const RANKED_NPCS_ON = '(npc = 1 OR (verified = 1 AND gh_created_at IS NOT NULL AND gh_created_at <= ?))';
 const RANKED_NPCS_OFF = '((verified = 1 AND gh_created_at IS NOT NULL AND gh_created_at <= ?))';
+const VISIBLE_NPCS_ON = '(verified = 1 OR npc = 1)';
+const VISIBLE_NPCS_OFF = '(verified = 1 AND npc = 0)';
 
 let db: Database;
 beforeEach(() => {
@@ -63,7 +65,7 @@ function add(p: Seed) {
 const veteran = (pid: string, o: Partial<Seed> = {}) => add({ pid, verified: 1, ghAgeDays: 400, ...o });
 const query = (pid: string | null, npcs = true): LeaderboardQuery => ({
   rankedSql: npcs ? RANKED_NPCS_ON : RANKED_NPCS_OFF,
-  visibleSql: npcs ? '1 = 1' : 'npc = 0',
+  visibleSql: npcs ? VISIBLE_NPCS_ON : VISIBLE_NPCS_OFF,
   minAccountAgeMs: MIN_AGE,
   now: NOW,
   pid,
@@ -75,13 +77,28 @@ describe('leaderboard lists', () => {
     veteran('gh:ana', { rating: 1100 });
     veteran('gh:bo', { rating: 1200 });
     add({ pid: 'npc:queen', npc: 1, rating: 1320 });
-    add({ pid: 'demo:pip' });
     add({ pid: 'gh:newbie', verified: 1, ghAgeDays: 5, wins: 2 });
     const r = await leaderboard(d1(db), query(null));
     expect(handles(r.players)).toEqual(['bo', 'ana']);
     expect(handles(r.npcs)).toEqual(['queen']);
-    expect(handles(r.unranked)).toEqual(['newbie', 'pip']);
+    expect(handles(r.unranked)).toEqual(['newbie']);
     expect(r.me).toBeNull();
+  });
+
+  test('rows left from the retired demo sign-in are never listed', async () => {
+    add({ pid: 'demo:pip', wins: 9 });
+    veteran('gh:ana');
+    for (const npcs of [true, false]) {
+      const r = await leaderboard(d1(db), query(null, npcs));
+      expect(handles([...r.players, ...r.npcs, ...r.unranked])).toEqual(['ana']);
+    }
+  });
+
+  test('rows carry no verified flag', async () => {
+    veteran('gh:ana');
+    const r = await leaderboard(d1(db), query('gh:ana'));
+    expect(Object.keys(r.players[0])).not.toContain('verified');
+    expect(Object.keys(r.me ?? {})).not.toContain('verified');
   });
 
   test('rows never include a pid', async () => {
@@ -142,22 +159,22 @@ describe('your place', () => {
     expect(r.me).toMatchObject({ ranked: true, rank: LEADERBOARD_LIMIT + 6, of: LEADERBOARD_LIMIT + 6 });
   });
 
-  test('a demo player needs a GitHub account', async () => {
+  test('a retired demo row gets no place', async () => {
     add({ pid: 'demo:pip', wins: 1 });
     const r = await leaderboard(d1(db), query('demo:pip'));
-    expect(r.me).toMatchObject({ handle: 'pip', ranked: false, reason: 'github', rankedAt: null, wins: 1 });
+    expect(r.me).toBeNull();
   });
 
   test('a new GitHub account is told when ranked play opens', async () => {
     add({ pid: 'gh:newbie', verified: 1, ghAgeDays: 18 });
     const r = await leaderboard(d1(db), query('gh:newbie'));
-    expect(r.me).toMatchObject({ ranked: false, reason: 'age', rankedAt: NOW + 12 * DAY });
+    expect(r.me).toMatchObject({ ranked: false, rankedAt: NOW + 12 * DAY });
   });
 
   test('a GitHub account of unknown age stays in practice', async () => {
     add({ pid: 'gh:old-row', verified: 1, ghAgeDays: null });
     const r = await leaderboard(d1(db), query('gh:old-row'));
-    expect(r.me).toMatchObject({ ranked: false, reason: 'age', rankedAt: null });
+    expect(r.me).toMatchObject({ ranked: false, rankedAt: null });
   });
 
   test('an account turns ranked on its 30th day', async () => {

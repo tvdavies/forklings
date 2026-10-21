@@ -1,6 +1,7 @@
 // Network-first service worker: always fresh when online, shell available offline.
-const CACHE = 'forklings-v1';
-const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon-192.png'];
+// Bump CACHE when the shell changes shape, so old offline copies (like the retired demo sign-in) are dropped.
+const CACHE = 'forklings-v2';
+const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/favicon-32.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', (e) => {

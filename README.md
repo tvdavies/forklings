@@ -14,7 +14,8 @@ Every Forkling is a 32×32 creature built from code: no hand-drawn sprites and n
 - **Dress it up.** Hats, glasses and scarves are cosmetic. One held item gives a small battle edge, capped at +6% to one stat.
 - **Coach it.** Set tactics with a few sliders, or write a [strategy script](docs/strategy-scripts.md) such as `when hp < 40 and ready heal: heal`.
 - **Battle.** Fights are automatic and deterministic. Each one is a seed plus two snapshots, so every replay is exact. A ladder of clearly marked NPCs plays around the clock.
-- **Ranked play** is for GitHub accounts at least 30 days old. Demo players and newer accounts battle NPCs and house bots without a rating. GitHub is used only for identity: the game never reads your repositories or activity.
+- **Sign in with GitHub.** It's the only way in, and it's for identity alone: Forklings sees your username and when your account was made, never your code, repositories or activity.
+- **Ranked play** is for GitHub accounts at least 30 days old. Newer accounts battle NPCs and house bots without a rating.
 
 | Home | Battle | Phone |
 | --- | --- | --- |
@@ -49,11 +50,15 @@ For local development, put the secrets in `.dev.vars`, which git ignores:
 HATCH_SALT=<any long random string>
 SESSION_SECRET=<another long random string>
 PUBLIC_ORIGIN=http://localhost:8787
+GITHUB_CLIENT_ID=<your dev OAuth app's client ID>
+GITHUB_CLIENT_SECRET=<its client secret>
 ```
 
 Apply the D1 migrations to the local database with `npx wrangler d1 migrations apply forklings-db --local`.
 
-Run `bun scripts/art.ts` to regenerate the README art, and `bun test/e2e/run.ts` to check a deployed copy in a real browser. `bun test/e2e/oauth.ts http://localhost:8787` checks MCP sign-in end to end against a local `npm run dev`: discovery, registration, consent, PKCE, scopes, refresh and revocation, using the MCP TypeScript SDK as the client. It signs up a demo player, and with `CHROMIUM` set it screenshots the consent page.
+Signing in needs a GitHub OAuth app, so make a separate one for development with the callback URL `http://localhost:8787/auth/github/callback`. Without one, the sign-in page says GitHub sign-in isn't set up.
+
+Run `bun scripts/art.ts` to regenerate the README art and `bun scripts/icons.ts` to regenerate the favicons, app icons and brand mark. `bun test/e2e/run.ts` checks a running copy in a real browser: on its own it covers the sign-in page, and with `FORKLINGS_SESSION` set to a signed-in `fk_session` cookie it plays through the whole game. `bun test/e2e/oauth.ts http://localhost:8787`, with the same `FORKLINGS_SESSION`, checks MCP sign-in end to end against a local `npm run dev`: discovery, registration, consent, PKCE, scopes, refresh and revocation, using the MCP TypeScript SDK as the client. With `CHROMIUM` set it screenshots the consent page.
 
 ## Deploy your own
 
@@ -67,7 +72,7 @@ openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET
 npm run deploy
 ```
 
-Change `routes` and `PUBLIC_ORIGIN` in `wrangler.jsonc` to your own domain. For GitHub sign-in, create an OAuth app with the callback URL `https://<your-domain>/auth/github/callback`, then set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` as secrets. Until you do, only demo sign-in is offered. Set `NPCS` to `off` to hide the house NPCs.
+Change `routes` and `PUBLIC_ORIGIN` in `wrangler.jsonc` to your own domain. Players sign in with GitHub, so [create an OAuth app](https://github.com/settings/applications/new) with the callback URL `https://<your-domain>/auth/github/callback` and set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` as secrets. [`docs/assets/brand/forklings-app-icon-1024.png`](docs/assets/brand/forklings-app-icon-1024.png) makes a good app logo. Set `NPCS` to `off` to hide the house NPCs.
 
 ## Licence
 
