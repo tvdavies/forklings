@@ -33,6 +33,49 @@ const watch = (p: Page) => {
   p.on('console', (m) => m.type() === 'error' && !m.text().startsWith('Failed to load resource') && errors.push(`console: ${m.text()}`));
 };
 
+// ---------- boot, with /api slow and then unreachable ----------
+await step('the first HTML response already paints a loading state', async () => {
+  const html = await (await fetch(BASE)).text();
+  expect(html.includes('id="boot"') && html.includes('Waking your Forkling'), 'index.html should carry the static loader');
+});
+
+const offline = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+const o = await offline.newPage();
+watch(o);
+await step('with /api blocked, the loader gives way to a retry panel', async () => {
+  let release = () => {};
+  const held = new Promise<void>((r) => {
+    release = r;
+  });
+  await o.route('**/api/**', async (r) => {
+    await held;
+    await r.abort('connectionrefused');
+  });
+  await o.goto(BASE);
+  await o.locator('#boot').waitFor({ state: 'visible' });
+  expect((await o.textContent('#bootLine')) === 'Waking your Forkling…', 'loader line shows while /api is pending');
+  await shot(o, 'phone-boot-loading');
+  release();
+  await o.waitForFunction(() => document.querySelector('#bootLine')?.textContent === "Can't reach Forklings");
+  await o.locator('#bootRetry').waitFor({ state: 'visible' });
+  expect(await o.evaluate(() => document.activeElement?.id === 'bootRetry'), 'Try again should take keyboard focus');
+  expect(await o.locator('[role=status]', { hasText: "Can't reach Forklings" }).count(), 'failure is announced in a status region');
+  await shot(o, 'phone-boot-offline');
+});
+
+await step('Try again recovers once /api is back, without reloading the page', async () => {
+  expect(await o.locator('#bootRetry').isVisible(), 'Try again should be showing');
+  await o.evaluate(() => {
+    (window as unknown as { stillHere: boolean }).stillHere = true;
+  });
+  await o.unroute('**/api/**');
+  await o.keyboard.press('Enter');
+  await o.locator('#boot').waitFor({ state: 'hidden' });
+  await o.locator('#v-login').waitFor({ state: 'visible' });
+  expect(await o.evaluate(() => (window as unknown as { stillHere?: boolean }).stillHere === true), 'page was reloaded');
+});
+await offline.close();
+
 // ---------- desktop ----------
 const desktop: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 });
 const p = await desktop.newPage();

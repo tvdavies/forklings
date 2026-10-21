@@ -548,7 +548,12 @@ async function renderBattleLog() {
   $('battleDot').hidden = true;
   const ul = $('battleLog');
   if (!r.battles.length) {
-    ul.innerHTML = '<li class="dim">No battles yet. Find one!</li>';
+    ul.innerHTML = `<li class="empty"><p>No battles yet. Your Forkling fights on its own, using the plan you set in Coach.</p>
+    <div class="row"><button class="btn" type="button" id="firstFightBtn">Find a battle</button><a class="btn ghost" href="#coach">Check the plan</a></div></li>`;
+    $('firstFightBtn').addEventListener('click', () => {
+      $('fightBtn').click();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
     return;
   }
   ul.innerHTML = r.battles
@@ -640,7 +645,7 @@ async function renderTokens() {
             `<li><div><span class="res">${esc(t.name)}</span><div class="meta">created ${new Date(t.created_at).toLocaleDateString()}${t.last_used ? ` · last used ${new Date(t.last_used).toLocaleString()}` : ' · never used'}</div></div><button class="btn ghost" data-revoke="${esc(t.id)}" type="button">Revoke</button></li>`,
         )
         .join('')
-    : '<li class="dim">No tokens yet.</li>';
+    : '<li class="empty"><p>No tokens yet. Name one above, then paste it into Claude Code, Pi or any MCP client.</p></li>';
   for (const b of ul.querySelectorAll<HTMLElement>('[data-revoke]'))
     b.addEventListener('click', async () => {
       await api(`/api/tokens/${b.dataset.revoke}`, { method: 'DELETE' });
@@ -673,16 +678,57 @@ setInterval(async () => {
   }
 }, 60000);
 
+// ---------- boot ----------
+// index.html paints a loader before this script runs. boot() swaps it for the app once /api answers,
+// or for a retry panel if it doesn't; Try again runs boot() again without reloading the page.
+let loginReady = false;
+async function boot() {
+  bootState('loading');
+  try {
+    await refresh();
+  } catch {
+    bootState('error');
+    return;
+  }
+  // Set up the login view once the API answers, so a failed first try doesn't leave it half set up.
+  if (!loginReady) {
+    loginReady = true;
+    await initLogin().catch(() => {
+      $('demoErr').textContent = "Couldn't reach Forklings. Check your connection and reload.";
+    });
+  }
+  $('boot').hidden = true;
+  route();
+}
+function bootState(state: 'loading' | 'error') {
+  const failed = state === 'error',
+    retry = $<HTMLButtonElement>('bootRetry');
+  $('boot').dataset.state = state;
+  $('bootLine').textContent = failed ? "Can't reach Forklings" : 'Waking your Forkling…';
+  $('bootWhy').textContent = failed
+    ? "The game server didn't answer, but your Forkling is safe. Check your connection, then try again."
+    : '';
+  if (failed) {
+    retry.hidden = false;
+    retry.removeAttribute('aria-disabled');
+    retry.textContent = 'Try again';
+    retry.focus();
+  } else if (!retry.hidden) {
+    // Retrying: keep the button (and keyboard focus) where it is, but inert until this attempt ends.
+    retry.setAttribute('aria-disabled', 'true');
+    retry.textContent = 'Trying…';
+  }
+}
+$('bootRetry').addEventListener('click', () => {
+  if ($('bootRetry').getAttribute('aria-disabled') !== 'true') boot();
+});
+
 (async function main() {
   initHatch();
   initCare();
   initCoach();
   initBattle();
   initTokens();
-  await initLogin().catch(() => {
-    $('demoErr').textContent = "Couldn't reach Forklings. Check your connection and reload.";
-  });
-  await refresh();
-  route();
+  await boot();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 })();
