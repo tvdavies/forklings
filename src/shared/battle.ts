@@ -12,7 +12,6 @@ export { compileTactics, DEFAULT_TACTICS, sanitiseTactics } from './strategy';
 export interface Snapshot {
   pid: string;
   handle: string;
-  verified: boolean;
   bot: boolean;
   seed: string;
   stage: number;
@@ -103,10 +102,14 @@ export function fighter(snap: Snapshot): Fighter {
   };
 }
 
-function typeMult(att: string, def: string): number {
-  const i = TYPES.indexOf(att),
-    j = TYPES.indexOf(def);
-  return (i + 1) % TYPES.length === j ? 1.15 : 1;
+/** Damage multiplier when a type hits the one it has the edge over. */
+export const TYPE_EDGE = 1.15;
+/** Each type has the edge over the next one in TYPES, wrapping round. */
+export function strongAgainst(type: string): string {
+  return TYPES[(TYPES.indexOf(type) + 1) % TYPES.length];
+}
+export function typeMult(att: string, def: string): number {
+  return strongAgainst(att) === def ? TYPE_EDGE : 1;
 }
 
 export interface BattleEvent {

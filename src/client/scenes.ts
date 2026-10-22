@@ -15,6 +15,7 @@ import {
   itemIcon,
   Particles,
   RM,
+  type SpriteCanvas,
   Stage,
   shield,
   snack,
@@ -23,6 +24,18 @@ import {
 } from './engine';
 
 /* ---------- hatch ---------- */
+/**
+ * How the hatch reveal scales with rarity, indexed by Genome.rarity (Common to Shiny): extra confetti,
+ * a flash and light in the rarity colour, and a longer hold on the rarity word before the card.
+ * The longest (Shiny) still shows the card before five seconds.
+ */
+const HATCH_TIERS = [
+  { confetti: 40, hold: 0, rays: 12, sparkle: 0 },
+  { confetti: 60, hold: 0.35, rays: 14, sparkle: 0 },
+  { confetti: 85, hold: 0.6, rays: 16, sparkle: 0.08 },
+  { confetti: 115, hold: 0.9, rays: 18, sparkle: 0.2 },
+  { confetti: 150, hold: 1.2, rays: 20, sparkle: 0.35 },
+];
 export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatched?: (g: Genome) => void }) {
   const st = new Stage(canvas, 96, 72, '#2c2146');
   st.floor = [58, '#4a3a6b'];
@@ -37,7 +50,7 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
     S.landed = false;
     S.parts.a = [];
   };
-  st.draw = (_x, t, dt) => {
+  st.draw = (x, t, dt) => {
     const g = S.g;
     if (!g) return;
     const bR = RAMPS[g.pal[0]],
@@ -86,17 +99,20 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
           jit = Math.floor(T * 28) % 2 ? 1 : -1;
           const a = clamp01((T - 2.4) / 0.55);
           st.glow(48, 46, 10 + a * 26, '#fff2dc', a * 0.8);
-          st.rays(48, 46, 30 + a * 20, T * 1.5, '#fff2dc', a * 0.12, 12);
+          // From Rare up, the light leaking through the cracks hints at the rarity colour.
+          st.rays(48, 46, 30 + a * 20, RM ? 0 : T * 1.5, g.rarity >= 2 ? RCOL[g.rarity] : '#fff2dc', a * 0.12, 12);
         }
         if (T > 0.95 && T < 1.05) st.shake(1, 0.08);
         if (T > 1.85 && T < 1.95) st.shake(1, 0.1);
         st.img(egg(g, lean, crack), gx + (RM ? 0 : jit), gy);
       } else {
+        const tier = HATCH_TIERS[g.rarity] ?? HATCH_TIERS[0],
+          rc = RCOL[g.rarity] ?? RCOL[0];
         if (!S.burst) {
           S.burst = true;
           S.flash = RM ? 0 : 1;
-          st.shake(2, 0.22);
-          for (let i = 0; i < 14; i++)
+          st.shake(2 + Math.min(1, g.rarity), 0.22 + g.rarity * 0.04);
+          for (let i = 0; i < 14 + g.rarity * 4; i++)
             S.parts.add({
               x: 44 + Math.random() * 8,
               y: 38 + Math.random() * 14,
@@ -108,26 +124,41 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
               life: 1 + Math.random() * 0.6,
               fade: 0.4,
             });
-          for (let i = 0; i < (RM ? 10 : 40); i++)
+          const confetti = RM ? 10 + g.rarity * 3 : tier.confetti;
+          for (let i = 0; i < confetti; i++)
             S.parts.add({
               x: 46 + Math.random() * 4,
               y: 40,
-              vx: (Math.random() - 0.5) * 110,
-              vy: -50 - Math.random() * 70,
+              vx: (Math.random() - 0.5) * (110 + g.rarity * 15),
+              vy: -50 - Math.random() * (70 + g.rarity * 10),
               g: 80,
               drag: 1.2,
-              s: 1,
-              c: [bR[1], bR[2], aR[1], aR[2], '#ffd166', '#fff2dc'][i % 6],
+              s: g.rarity && i % 5 === 0 ? 2 : 1,
+              // From Uncommon up, a share of the confetti is in the rarity colour.
+              c: g.rarity && i % 3 === 0 ? rc : [bR[1], bR[2], aR[1], aR[2], '#ffd166', '#fff2dc'][i % 6],
               life: 1.4 + Math.random() * 1.2,
               fade: 0.5,
             });
         }
-        const T2 = T - 2.95;
-        if (T2 < 2.2) {
-          const a = 1 - T2 / 2.2;
-          st.glow(48, 44, 34, bR[3], 0.35 * a);
-          st.rays(48, 44, 60, t * 0.6, '#fff2dc', 0.1 * a, 12);
+        const T2 = T - 2.95,
+          glowFor = 2.2 + tier.hold;
+        if (T2 < glowFor) {
+          const a = 1 - T2 / glowFor;
+          st.glow(48, 44, 34 + g.rarity * 4, g.rarity >= 2 ? rc : bR[3], (0.35 + g.rarity * 0.05) * a);
+          st.rays(48, 44, 60, RM ? 0.3 : t * 0.6, g.rarity ? rc : '#fff2dc', (0.1 + g.rarity * 0.025) * a, tier.rays);
         }
+        // Epic and Shiny pets keep twinkling in their rarity colour.
+        if (!RM && Math.random() < tier.sparkle)
+          S.parts.add({
+            x: 30 + Math.random() * 36,
+            y: 26 + Math.random() * 30,
+            vx: 0,
+            vy: -6,
+            s: 1,
+            c: Math.random() < 0.6 ? rc : '#fff2dc',
+            life: 0.7,
+            fade: 0.35,
+          });
         let y = 0,
           pose: Pose;
         const base = { stage: 0 };
@@ -162,7 +193,19 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
         } else pose = idlePose(g, t, base);
         pose.phase = Math.floor(t * 5) % 2;
         st.img(spr(g, pose), gx, gy + y);
-        if (T > 3.7 && !S.carded) {
+        // From Uncommon up, the rarity word pops in over the pet and holds until the card springs up.
+        if (g.rarity && T2 > 0.4 && T2 < 1.05 + tier.hold) {
+          const ca = T2 - 0.4,
+            size = 6 + Math.min(2, g.rarity),
+            word = `${RARITY[g.rarity]}!`,
+            w = Math.ceil(word.length * size * 0.6) + 8,
+            sc = RM ? 1 : ease.back(clamp01(ca / 0.3));
+          x.globalAlpha = clamp01(ca / (RM ? 0.3 : 0.12));
+          st.panel(48 - w / 2, 10, w, size + 4, INK, rc);
+          st.text(word, 48, 11.5 + (size * (1 - sc)) / 2, size * Math.max(0.6, sc), rc, 'center', 700);
+          x.globalAlpha = 1;
+        }
+        if (T > 3.7 + tier.hold && !S.carded) {
           S.carded = true;
           opts.onHatched?.(g);
         }
@@ -174,8 +217,8 @@ export function makeHatch(canvas: HTMLCanvasElement, opts: { g: Genome; onHatche
     S.parts.step(dt);
     S.parts.draw(st);
     if (S.flash > 0) {
-      st.fadeAll('#fff6e6', S.flash);
-      S.flash -= dt / 0.35;
+      st.fadeAll(S.g.rarity ? (RCOL[S.g.rarity] ?? '#fff6e6') : '#fff6e6', S.flash);
+      S.flash -= dt / (0.35 + S.g.rarity * 0.08);
     }
   };
   return Object.assign(st, { hatch });
@@ -195,7 +238,67 @@ interface HomeState {
   kind: string;
   parts: Particles;
   hop: number;
+  bubble: { lines: string[]; ok: boolean; t0: number; dur: number } | null;
 }
+
+// Speech bubble: Pixelify at 6 art pixels, wrapped to at most two lines.
+const BUBBLE_SIZE = 6,
+  BUBBLE_LINE = 7,
+  BUBBLE_PAD = 3,
+  BUBBLE_MAX_W = 66;
+/** Splits on plain spaces only, so a non-breaking space keeps "+6 XP" together. */
+function wrapBubble(st: Stage, text: string): string[] {
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of text.split(/ +/).filter(Boolean)) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (cur && st.measure(next, BUBBLE_SIZE) > BUBBLE_MAX_W) {
+      lines.push(cur);
+      cur = w;
+    } else cur = next;
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > 2) lines.splice(1, lines.length - 1, `${lines.slice(1).join(' ')}`);
+  return lines;
+}
+/** The first row of a sprite with any pixels in it: where the head is. */
+const tops = new WeakMap<SpriteCanvas, number>();
+function spriteTop(c: SpriteCanvas) {
+  let top = tops.get(c);
+  if (top === undefined) {
+    const i = c.cols.findIndex(Boolean);
+    top = i < 0 ? 0 : Math.floor(i / c.width);
+    tops.set(c, top);
+  }
+  return top;
+}
+/** A pixel speech bubble whose tail points down at `cx`, with its bottom edge at `by`. Coral edge when the care didn't work. */
+function drawBubble(st: Stage, b: NonNullable<HomeState['bubble']>, cx: number, by: number, t: number) {
+  const age = t - b.t0;
+  const w = Math.ceil(Math.max(...b.lines.map((l) => st.measure(l, BUBBLE_SIZE)))) + BUBBLE_PAD * 2;
+  const h = b.lines.length * BUBBLE_LINE + BUBBLE_PAD * 2 - 1;
+  const rise = RM ? 0 : age < 0.12 ? 2 : 0;
+  const x = Math.max(2, Math.min(st.aw - 2 - w, Math.round(cx - w / 2))),
+    y = by - h - 3 + rise;
+  const fade = clamp01((b.dur - age) / 0.3);
+  const edge = b.ok ? INK : '#ff6f62';
+  st.ctx.globalAlpha = fade;
+  st.rect(x + 1, y, w - 2, h, edge);
+  st.rect(x, y + 1, w, h - 2, edge);
+  st.rect(x + 1, y + 1, w - 2, h - 2, '#fff2dc');
+  const tx = Math.max(x + 3, Math.min(x + w - 6, Math.round(cx) - 1));
+  st.rect(tx, y + h - 1, 3, 1, '#fff2dc');
+  st.rect(tx - 1, y + h - 1, 1, 2, edge);
+  st.rect(tx + 3, y + h - 1, 1, 1, edge);
+  st.rect(tx + 2, y + h, 1, 2, edge);
+  st.rect(tx, y + h, 2, 1, '#fff2dc');
+  st.rect(tx, y + h + 1, 2, 1, edge);
+  b.lines.forEach((l, i) => {
+    st.text(l, x + w / 2, y + BUBBLE_PAD + i * BUBBLE_LINE - 1, BUBBLE_SIZE, INK, 'center');
+  });
+  st.ctx.globalAlpha = 1;
+}
+
 export function makeHome(canvas: HTMLCanvasElement) {
   const home = new Stage(canvas, 160, 90, '#3b2c55');
   home.floor = [64, '#7a4a34'];
@@ -212,6 +315,12 @@ export function makeHome(canvas: HTMLCanvasElement) {
     kind: '',
     parts: new Particles(),
     hop: 0,
+    bubble: null,
+  };
+  /** Show care feedback in a speech bubble over the pet. */
+  const say = (text: string, ok = true) => {
+    const lines = wrapBubble(home, text);
+    H.bubble = lines.length ? { lines, ok, t0: home.t, dur: Math.min(4.5, 2.2 + text.length * 0.04) } : null;
   };
   const set = (g: Genome, stage: number, napping: boolean, mood: string) => {
     H.g = g;
@@ -392,8 +501,10 @@ export function makeHome(canvas: HTMLCanvasElement) {
     s.img(spr(g, pose), H.x, 52 + y, H.mode === 'walk' && H.dir > 0);
     H.parts.step(dt);
     H.parts.draw(s);
+    if (H.bubble && t - H.bubble.t0 > H.bubble.dur) H.bubble = null;
+    if (H.bubble) drawBubble(s, H.bubble, H.x + 16, 52 + spriteTop(spr(g, { stage: st })) - 3, t);
   };
-  return Object.assign(home, { set, react });
+  return Object.assign(home, { set, react, say });
 }
 
 /* ---------- battle replay ---------- */
@@ -408,6 +519,8 @@ export interface Replay {
 export interface PlayOpts {
   speed?: number;
   onDone?: (res: BattleResult) => void;
+  /** Called with each line of narration as it is shown, so the page can repeat it to screen readers. */
+  onLine?: (text: string) => void;
 }
 type Side = 'L' | 'R';
 interface Scheduled {
@@ -442,6 +555,7 @@ interface BattleRun {
   gh: number[];
   ghD: number[];
   onDone?: (res: BattleResult) => void;
+  onLine?: (text: string) => void;
   loot: string | null;
   doneFired: boolean;
 }
@@ -495,6 +609,7 @@ export function makeBattle(canvas: HTMLCanvasElement) {
       gh: [res.maxHp[0], res.maxHp[1]],
       ghD: [0, 0],
       onDone: opts.onDone,
+      onLine: opts.onLine,
       loot: viewerSide === 0 ? (rep.loot ?? res.loot) : null,
       doneFired: false,
     };
@@ -552,6 +667,7 @@ export function makeBattle(canvas: HTMLCanvasElement) {
     const pose: Record<Side, Pose> = { L: idlePose(R.gs[R.L], t), R: idlePose(R.gs[R.Rr], t + 1.3) };
     const vis = { L: true, R: true };
     let msg = `${R.gs[R.L].name} vs @${R.snaps[R.Rr].handle}'s ${R.gs[R.Rr].name}`;
+    once('sayStart', () => R.onLine?.(msg));
     const hp = [R.res.maxHp[0], R.res.maxHp[1]];
     for (const sc of R.sched) {
       const ev = sc.ev,
@@ -562,7 +678,10 @@ export function makeBattle(canvas: HTMLCanvasElement) {
         hp[0] = ev.hp[0];
         hp[1] = ev.hp[1];
       }
-      if (T >= sc.t0) msg = ev.text;
+      if (T >= sc.t0) {
+        msg = ev.text;
+        once(`say${sc.t0}`, () => R.onLine?.(ev.text));
+      }
       if (ev.kind === 'faint' && T >= sc.t0) {
         vis[me] = T < sc.t0 + 0.5;
         if (T < sc.t0 + 0.5) pose[me] = { eyes: 'closed', mouth: 'frown', sq: 1 };
@@ -664,6 +783,8 @@ export function makeBattle(canvas: HTMLCanvasElement) {
     }
     const won = R.res.winner === null ? null : R.res.winner === R.L;
     const after = T - R.end;
+    // The loot label is drawn after the sprites, so the opponent can't cover it.
+    let lootTag: { name: string; note: string; col: string; y: number; alpha: number } | null = null;
     if (after >= 0) {
       const a = after;
       if (won) {
@@ -674,7 +795,11 @@ export function makeBattle(canvas: HTMLCanvasElement) {
         } else pose.L = idlePose(R.gs[R.L], t, { eyes: 'happy' });
       } else if (won === false) pose.R = idlePose(R.gs[R.Rr], t + 1.3, { eyes: 'happy' });
       msg = won ? `Victory. +${R.res.xp[R.L]} XP` : won === false ? `Defeat. +${R.res.xp[R.L]} XP` : `Time! A draw. +${R.res.xp[R.L]} XP`;
-      if (R.loot && a > 2.2) msg = `Loot: ${ITEMS[R.loot]?.name}`;
+      once('sayEnd', () => R.onLine?.(msg));
+      if (R.loot && a > 2.2) {
+        msg = `Loot: ${ITEMS[R.loot]?.name}`;
+        once('sayLoot', () => R.onLine?.(msg));
+      }
       const yy = -14 + 38 * ease.back(clamp01(a / 0.35));
       const bc = won ? '#ffd166' : won === false ? '#ff6f62' : '#86bdff';
       if (a < (R.loot ? 2.2 : 99)) {
@@ -739,14 +864,14 @@ export function makeBattle(canvas: HTMLCanvasElement) {
           const ic = itemIcon(R.loot);
           const iy = GY - 14 - 9 * ease.back(clamp01(c / 0.5));
           s.img(ic, 75 - Math.round(ic.width / 2), iy);
-          if (c > 0.45) {
-            x.globalAlpha = clamp01((c - 0.45) / 0.15);
-            const w = Math.max(40, it.name.length * 3.2 + 8);
-            s.panel(92, iy - 3, w, 15, INK, rc);
-            s.text(it.name, 95, iy - 1.8, 5.5, '#fff2dc');
-            s.text(RARITY[it.rarity] + (R.rep.lootNote === 'duplicate' ? ' (dupe: +10 XP)' : ''), 95, iy + 4.6, 4.5, rc);
-            x.globalAlpha = 1;
-          }
+          if (c > 0.45)
+            lootTag = {
+              name: it.name,
+              note: RARITY[it.rarity] + (R.rep.lootNote === 'duplicate' ? ' (dupe: +10 XP)' : ''),
+              col: rc,
+              y: iy - 18,
+              alpha: clamp01((c - 0.45) / 0.15),
+            };
         }
         s.img(open ? co : cc, 68 + wx, open ? cy - 2 : cy);
       }
@@ -766,26 +891,42 @@ export function makeBattle(canvas: HTMLCanvasElement) {
       const p = { ...pose[k], stage: R.snaps[i].stage, phase: Math.floor(t * 5) % 2 };
       s.img(spr(R.gs[i], p), X[k] + dx[k], GY - 30 + dy[k], k === 'R');
     }
+    if (lootTag) {
+      // Centred above the chest (x = 75), clear of the HP bars.
+      const w = Math.round(Math.max(40, lootTag.name.length * 3.2 + 8, lootTag.note.length * 2.6 + 8));
+      x.globalAlpha = lootTag.alpha;
+      s.panel(75 - Math.round(w / 2), lootTag.y, w, 15, INK, lootTag.col);
+      s.text(lootTag.name, 75, lootTag.y + 1.2, 5.5, '#fff2dc', 'center');
+      s.text(lootTag.note, 75, lootTag.y + 7.6, 4.5, lootTag.col, 'center');
+      x.globalAlpha = 1;
+    }
     // HP with ghost bars
     for (const i of [0, 1]) {
       if (R.ghD[i] > 0) R.ghD[i] -= sdt;
       else R.gh[i] = Math.max(hp[i], R.gh[i] - 60 * sdt);
       if (R.gh[i] < hp[i]) R.gh[i] = hp[i];
     }
+    // HUD type grows on small canvases so names and narration stay at least 15 CSS px tall.
+    const k = Math.min(1.5, Math.max(1, 15 / (5.5 * (s.P / (window.devicePixelRatio || 1)))));
+    const hw = Math.round(Math.min(64 * k, 75)),
+      bh = Math.round(4 * k);
     const hud = (x0: number, i: number) => {
       const g = R.gs[i],
         max = R.res.maxHp[i];
-      s.panel(x0, 3, 64, 17, INK, '#4a3a6b');
-      s.text(g.name, x0 + 3, 4.5, 5.5, '#fff2dc');
-      s.text(`Lv ${R.snaps[i].level}`, x0 + 61, 5, 4.5, '#b9a8cf', 'right');
-      s.rect(x0 + 3, 14, 58, 4, '#0f0a17');
-      const w = Math.round((56 * R.gh[i]) / max),
-        f = Math.round((56 * hp[i]) / max);
-      s.rect(x0 + 4, 15, w, 2, '#fff2dc');
-      s.rect(x0 + 4, 15, f, 2, hp[i] / max > 0.5 ? '#6fdc9c' : hp[i] / max > 0.2 ? '#ffd166' : '#ff6f62');
+      const lv = `Lv ${R.snaps[i].level}`;
+      s.panel(x0, 3, hw, 11 * k + bh + 2, INK, '#4a3a6b');
+      s.text(s.fit(g.name, 5.5 * k, hw - 8 - s.measure(lv, 4.5 * k)), x0 + 3, 3 + 1.5 * k, 5.5 * k, '#fff2dc');
+      s.text(lv, x0 + hw - 3, 3 + 2 * k, 4.5 * k, '#b9a8cf', 'right');
+      const by = Math.round(3 + 11 * k),
+        bw = hw - 8;
+      s.rect(x0 + 3, by, hw - 6, bh, '#0f0a17');
+      const w = Math.round((bw * R.gh[i]) / max),
+        f = Math.round((bw * hp[i]) / max);
+      s.rect(x0 + 4, by + 1, w, bh - 2, '#fff2dc');
+      s.rect(x0 + 4, by + 1, f, bh - 2, hp[i] / max > 0.5 ? '#6fdc9c' : hp[i] / max > 0.2 ? '#ffd166' : '#ff6f62');
     };
     hud(3, R.L);
-    hud(93, R.Rr);
+    hud(157 - hw, R.Rr);
     for (const d of R.dmg) {
       const a = (t - d.t0) * R.speed;
       if (a > 1.1) continue;
@@ -800,8 +941,9 @@ export function makeBattle(canvas: HTMLCanvasElement) {
     }
     R.parts.step(sdt);
     R.parts.draw(s);
-    s.panel(3, 79, 154, 9, 'rgba(26,17,36,0.9)', '#4a3a6b');
-    s.text(msg.length > 46 ? `${msg.slice(0, 45)}…` : msg, 6, 80.2, 5.5, '#fff2dc');
+    const nh = Math.round(9 * k);
+    s.panel(3, 88 - nh, 154, nh, 'rgba(26,17,36,0.9)', '#4a3a6b');
+    s.text(s.fit(msg, 5.5 * k, 148), 6, 88 - nh + 1.2 * k, 5.5 * k, '#fff2dc');
     function spark(cx: number, cy: number, n: number) {
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + Math.random() * 0.3,
@@ -824,6 +966,8 @@ export function makeBattle(canvas: HTMLCanvasElement) {
 }
 
 /* ---------- evolution ---------- */
+// Build-up, reveal and bounce, then the old and new forms settle side by side with the stat gains
+// underneath. With reduced motion, the silhouettes crossfade once instead of flickering.
 export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: number, chips: [string, string][], onDone?: () => void) {
   const evo = new Stage(canvas, 96, 72, '#1c1530');
   const E = { parts: new Particles(), fired: {} as Record<string, number>, done: false, t0: evo.t };
@@ -849,18 +993,28 @@ export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: 
       }
     };
     s.rect(0, 0, 96, 72, '#1c1530');
-    for (let yy = 0; yy < 4; yy++) {
-      const w = 40 - Math.abs(1.5 - yy) * 8;
-      s.rect(48 - w / 2, 58 + yy, w, 1, yy === 0 ? '#4a3a6b' : '#33264c');
-    }
+    const floor = (cx: number, fy: number) => {
+      for (let yy = 0; yy < 4; yy++) {
+        const w = 40 - Math.abs(1.5 - yy) * 8;
+        s.rect(cx - w / 2, fy + yy, w, 1, yy === 0 ? '#4a3a6b' : '#33264c');
+      }
+    };
     const gx = 32,
       gy = 59 - 30;
+    // How far the ending has moved into its side-by-side layout (0 centred, 1 settled).
+    const k = T < 3.8 ? 0 : RM ? clamp01((T - 3.8 - 1.4) / 0.4) : ease.inOut(clamp01((T - 3.8 - 1.4) / 0.5));
+    if (!RM) floor(48 + 24 * k, 58 - 9 * k);
+    else if (k < 1) {
+      x.globalAlpha = 1 - k;
+      floor(48, 58);
+      x.globalAlpha = 1;
+    }
     if (T < 1.2) {
       s.img(spr(g, idlePose(g, t, { stage: from })), gx, gy);
       s.text(`${g.name} is evolving`, 48, 6, 6, '#fff2dc', 'center');
     } else if (T < 3.8) {
       const a = clamp01((T - 1.2) / 2.6);
-      if (Math.random() < 0.6)
+      if (Math.random() < (RM ? 0.15 : 0.6))
         E.parts.add({
           x: 30 + Math.random() * 36,
           y: 60,
@@ -872,10 +1026,19 @@ export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: 
           fade: 0.6,
         });
       s.glow(48, 44, 14 + a * 20, bR[2], 0.35 + a * 0.4);
-      let idx = -1;
-      for (let i = 0; i < swaps.length; i++) if (T >= swaps[i]) idx = i;
-      const showNew = idx % 2 === 0;
-      s.img(spr(g, { stage: showNew ? to : from, sil: '#fff2dc', noItems: true }), gx, gy);
+      if (RM) {
+        const f = ease.inOut(clamp01((T - swaps[0]) / (3.8 - swaps[0])));
+        x.globalAlpha = 1 - f;
+        s.img(spr(g, { stage: from, sil: '#fff2dc', noItems: true }), gx, gy);
+        x.globalAlpha = f;
+        s.img(spr(g, { stage: to, sil: '#fff2dc', noItems: true }), gx, gy);
+        x.globalAlpha = 1;
+      } else {
+        let idx = -1;
+        for (let i = 0; i < swaps.length; i++) if (T >= swaps[i]) idx = i;
+        const showNew = idx % 2 === 0;
+        s.img(spr(g, { stage: showNew ? to : from, sil: '#fff2dc', noItems: true }), gx, gy);
+      }
       s.text(`${g.name} is evolving`, 48, 6, 6, '#fff2dc', 'center');
     } else {
       once('burst', () => {
@@ -896,26 +1059,58 @@ export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: 
         }
       });
       const a = T - 3.8;
-      s.rays(48, 44, 70, t * 0.5, '#fff2dc', 0.1, 14);
-      s.glow(48, 44, 30, bR[3], 0.3);
+      s.rays(48 + 24 * k, 44 - 9 * k, 70, RM ? 0 : t * 0.5, '#fff2dc', 0.1, 14);
+      s.glow(48 + 24 * k, 44 - 9 * k, 30, bR[3], 0.3);
       let y = 0,
         pose: Pose;
-      if (a > 0.5 && a < 1.2) {
+      if (!RM && a > 0.5 && a < 1.2) {
         const ph = ((a - 0.5) / 0.35) % 1;
         y = -Math.round(Math.sin(ph * Math.PI) * 4);
         pose = { stage: to, eyes: 'happy', mouth: 'open', sq: ph < 0.12 || ph > 0.88 ? 1 : -1 };
       } else pose = idlePose(g, t, { stage: to });
       pose.phase = Math.floor(t * 5) % 2;
-      s.img(spr(g, pose), gx, gy + y);
-      chips.forEach(([txt, c], i) => {
-        const ca = a - 0.9 - i * 0.35;
+      if (RM) {
+        // Crossfade from the centred reveal to the side-by-side layout.
+        x.globalAlpha = 1 - k;
+        s.img(spr(g, pose), gx, gy);
+        x.globalAlpha = 1;
+      }
+      if (k > 0) {
+        // Old form on the left, an arrow, the new form on the right.
+        x.globalAlpha = k;
+        floor(24, 49);
+        if (RM) floor(72, 49);
+        s.img(spr(g, idlePose(g, t + 0.7, { stage: from })), 8, 20);
+        s.rect(43, 35, 6, 2, '#ffd166');
+        s.rect(49, 33, 1, 6, '#ffd166');
+        s.rect(50, 34, 1, 4, '#ffd166');
+        s.rect(51, 35, 1, 2, '#ffd166');
+        if (RM) s.img(spr(g, pose), 56, 20);
+        x.globalAlpha = 1;
+      }
+      if (!RM) s.img(spr(g, pose), gx + 24 * k, gy + y - 9 * k);
+      // Stat chips sit in rows under the two forms once they have settled.
+      let row = 0,
+        rowW = 0;
+      const laid = chips.map(([txt, c]) => {
+        const w = Math.round(s.measure(txt, 5) + 6);
+        if (rowW && rowW + 3 + w > 92) {
+          row++;
+          rowW = 0;
+        }
+        const at = { txt, c, w, row, x: rowW ? rowW + 3 : 0 };
+        rowW = at.x + w;
+        return at;
+      });
+      laid.forEach(({ txt, c, w, row: r, x: rx }, i) => {
+        const ca = a - 2 - i * 0.3;
         if (ca < 0) return;
-        const sc = ease.back(clamp01(ca / 0.3));
-        const w = txt.length * 2.9 + 6;
-        const cx0 = 48 - w / 2;
-        x.globalAlpha = clamp01(ca / 0.12);
-        s.panel(cx0, 4 + i * 9, w, 8, INK, c);
-        s.text(txt, 48, 4 + i * 9 + 1.2, 5 * Math.max(0.6, sc), c, 'center');
+        const last = laid.filter((l) => l.row === r).pop()!;
+        const cx0 = Math.round(48 - (last.x + last.w) / 2 + rx);
+        const sc = RM ? 1 : ease.back(clamp01(ca / 0.3));
+        x.globalAlpha = clamp01(ca / (RM ? 0.3 : 0.12));
+        s.panel(cx0, 55 + r * 9, w, 8, INK, c);
+        s.text(txt, cx0 + w / 2, 55 + r * 9 + 1.2, 5 * Math.max(0.6, sc), c, 'center');
         x.globalAlpha = 1;
       });
       if (a < 0.5) s.fadeAll('#fff6e6', RM ? 0 : 1 - a / 0.5);

@@ -15,7 +15,8 @@ Every Forkling is a 32×32 creature built from code: no hand-drawn sprites and n
 - **Shop.** Battles, daily care and level-ups earn bits, which can't be bought. Every night at 00:00 UTC the shop makes six new items from code, each checked against everything sold before so no two look alike. Try them on in the fitting room, then buy with two taps. Rarer items unlock at higher levels. See [the economy](docs/economy.md).
 - **Coach it.** Set tactics with a few sliders, or write a [strategy script](docs/strategy-scripts.md) such as `when hp < 40 and ready heal: heal`.
 - **Battle.** Fights are automatic and deterministic. Each one is a seed plus two snapshots, so every replay is exact. A ladder of clearly marked NPCs plays around the clock.
-- **Ranked play** is for GitHub accounts at least 30 days old. Demo players and newer accounts battle NPCs and house bots without a rating. GitHub is used only for identity: the game never reads your repositories or activity.
+- **Sign in with GitHub.** It's the only way in, and it's for identity alone: Forklings sees your username and when your account was made, never your code, repositories or activity.
+- **Ranked play** is for GitHub accounts at least 30 days old. Newer accounts battle NPCs and house bots without a rating.
 
 | Home | Battle | Phone |
 | --- | --- | --- |
@@ -32,10 +33,11 @@ Forklings has an MCP server at `https://forklings.dev/mcp` and a Claude Code plu
 ```text
 /plugin marketplace add tvdavies/forklings
 /plugin install forklings@forklings
+/mcp                         # pick forklings, Authenticate, sign in with GitHub
 /forklings:forkling feed
 ```
 
-Create a token on the site's **API** tab first. [docs/claude-code.md](docs/claude-code.md) covers the status line and setup for Pi, Codex and other MCP clients.
+There's no token to paste: your tool signs in through the browser with OAuth, and you choose what it may do. Connected tools are listed, and can be disconnected, on the site's **API** tab. [docs/claude-code.md](docs/claude-code.md) covers Codex, Pi, other MCP clients, personal tokens for scripts and the status line.
 
 ## Quick start
 
@@ -52,9 +54,20 @@ For local development, put the secrets in `.dev.vars`, which git ignores:
 ```sh
 HATCH_SALT=<any long random string>
 SESSION_SECRET=<another long random string>
+PUBLIC_ORIGIN=http://localhost:8787
+GITHUB_CLIENT_ID=<your dev OAuth app's client ID>
+GITHUB_CLIENT_SECRET=<its client secret>
 ```
 
-Run `bun scripts/art.ts` to regenerate the README art, and `bun test/e2e/run.ts` to check a deployed copy in a real browser.
+Apply the D1 migrations to the local database with `npx wrangler d1 migrations apply forklings-db --local`.
+
+Signing in needs a GitHub OAuth app, so make a separate one for development with the callback URL `http://localhost:8787/auth/github/callback`. Without one, the sign-in page says GitHub sign-in isn't set up.
+
+Run `bun scripts/art.ts` to regenerate the README art and `bun scripts/icons.ts` to regenerate the favicons, app icons and brand mark.
+
+`npm run e2e:local` runs the whole end-to-end suite in a real browser with no GitHub OAuth app and no `.dev.vars`: it starts a throwaway `wrangler dev` on port 8787 with a fresh local database, fires the cron once so the house NPCs exist, adds a signed-in test player the way GitHub sign-in would (a `players` row plus a session cookie), then runs both scripts below. A session cookie on its own isn't enough: without the `players` row the player is left off the leaderboard and their API tokens are refused.
+
+`bun test/e2e/run.ts` checks a running copy in a real browser: on its own it covers the sign-in page, and with `FORKLINGS_SESSION` set to a signed-in `fk_session` cookie it plays through the whole game. `bun test/e2e/oauth.ts http://localhost:8787`, with the same `FORKLINGS_SESSION`, checks MCP sign-in end to end against a local `npm run dev`: discovery, registration, consent, PKCE, scopes, refresh and revocation, using the MCP TypeScript SDK as the client. With `CHROMIUM` set it screenshots the consent page.
 
 ## Deploy your own
 
@@ -62,13 +75,13 @@ It runs on one Cloudflare Worker with SQLite-backed Durable Objects and one D1 d
 
 ```sh
 npx wrangler d1 create forklings-db         # put the new database_id in wrangler.jsonc
-npx wrangler d1 migrations apply forklings-db --remote
+npx wrangler d1 migrations apply forklings-db --remote   # includes the OAuth token table
 openssl rand -hex 32 | npx wrangler secret put HATCH_SALT
 openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET
 npm run deploy
 ```
 
-Change `routes` and `PUBLIC_ORIGIN` in `wrangler.jsonc` to your own domain. For GitHub sign-in, create an OAuth app with the callback URL `https://<your-domain>/auth/github/callback`, then set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` as secrets. Until you do, only demo sign-in is offered. Set `NPCS` to `off` to hide the house NPCs. The shop's generator salt comes from `HATCH_SALT` unless you set a separate `SHOP_SALT` secret. Set it before the first night's items are made: changing it later changes every night that hasn't been made yet. Making a night's items needs more CPU than the Workers Free plan allows (see [the economy](docs/economy.md#capacity-and-cpu)).
+Change `routes` and `PUBLIC_ORIGIN` in `wrangler.jsonc` to your own domain. Players sign in with GitHub, so [create an OAuth app](https://github.com/settings/applications/new) with the callback URL `https://<your-domain>/auth/github/callback` and set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` as secrets. [`docs/assets/brand/forklings-app-icon-1024.png`](docs/assets/brand/forklings-app-icon-1024.png) makes a good app logo. Set `NPCS` to `off` to hide the house NPCs. The shop's generator salt comes from `HATCH_SALT` unless you set a separate `SHOP_SALT` secret. Set it before the first night's items are made: changing it later changes every night that hasn't been made yet. Making a night's items needs more CPU than the Workers Free plan allows (see [the economy](docs/economy.md#capacity-and-cpu)).
 
 ## Licence
 

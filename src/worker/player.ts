@@ -4,7 +4,20 @@ import { DurableObject } from 'cloudflare:workers';
 import { type BattleResult, compileTactics, DEFAULT_TACTICS, type Snapshot, sanitiseTactics, type Tactics } from '../shared/battle';
 import { ITEMS, type ItemDef, isSlot, noItems, type Slot } from '../shared/compose';
 import { npcPick, type Offer, REWARDS } from '../shared/economy';
+import {
+  closeFirstDay,
+  type FirstDay,
+  type FirstDayStep,
+  type FirstDayView,
+  firstDayView,
+  needsReward,
+  rewarded,
+  rewardFor,
+  startFirstDay,
+  tickStep,
+} from '../shared/firstday';
 import { genome } from '../shared/genome';
+import { npcPid } from '../shared/npcs';
 import { hatchSeed, hatchTimeIso } from '../shared/rng';
 import { formatStrategy, parseScript, ScriptError } from '../shared/script';
 import {
@@ -47,7 +60,6 @@ interface Creature {
 export interface Who {
   pid: string;
   handle: string;
-  verified: boolean;
   created: number;
 }
 
@@ -118,6 +130,8 @@ export interface PlayerView {
   unseenDefences: number;
   /** Absent until the player has hatched. */
   now?: number;
+  /** The first-day checklist; null once it's closed or for house NPCs, absent until the player has hatched. */
+  firstDay?: FirstDayView | null;
 }
 
 export interface CareOutcome {
@@ -257,10 +271,10 @@ export class PlayerDO extends DurableObject<Env> {
     return c;
   }
 
-  async init(pid: string, handle: string, verified: boolean): Promise<void> {
+  async init(pid: string, handle: string): Promise<void> {
     const p = this.get<Who>('who');
-    if (!p || p.handle !== handle || p.verified !== verified) {
-      const who: Who = { pid, handle, verified, created: p?.created ?? Date.now() };
+    if (!p || p.handle !== handle) {
+      const who: Who = { pid, handle, created: p?.created ?? Date.now() };
       this.set('who', who);
     }
   }
@@ -281,6 +295,9 @@ export class PlayerDO extends DurableObject<Env> {
       const left = r.at + COOLDOWNS[r.action] - now;
       if (left > 0) cool[r.action] = left;
     }
+    // Lets the web app wait out the gap between battles instead of failing a quick "Fight again".
+    const battleLeft = (this.get<number>('lastBattle') ?? 0) + BATTLE_COOLDOWN_MS - now;
+    if (battleLeft > 0) cool.battle = battleLeft;
     return {
       who,
       creature: {
@@ -304,7 +321,63 @@ export class PlayerDO extends DurableObject<Env> {
       wallet: this.walletView(now),
       unseenDefences: unseen?.n ?? 0,
       now,
+      firstDay: this.firstDayOf(c, now)?.view ?? null,
     };
+  }
+
+  /**
+   * The first-day checklist, or null for house NPCs. Created on first use, with any steps
+   * the player's history already covers ticked, so players from before it existed aren't
+   * asked to do things again.
+   */
+  private firstDayOf(c: Creature, now: number): { fd: FirstDay; view: FirstDayView | null } | null {
+    const who = this.get<Who>('who');
+    if (!who || who.pid.startsWith(npcPid(''))) return null;
+    let fd = this.get<FirstDay>('firstDay');
+    if (!fd) {
+      const t = c.tactics;
+      fd = this.saveFirstDay(
+        startFirstDay(
+          {
+            fed: this.sql.exec("SELECT 1 FROM care_log WHERE action = 'feed'").toArray().length > 0,
+            dressed: Object.values(c.items).some(Boolean),
+            planned: !!c.script || (Object.keys(DEFAULT_TACTICS) as (keyof Tactics)[]).some((k) => t[k] !== DEFAULT_TACTICS[k]),
+            won: this.sql.exec("SELECT 1 FROM battles WHERE outcome = 'win' LIMIT 1").toArray().length > 0,
+          },
+          now,
+        ),
+        now,
+      );
+    }
+    return { fd, view: firstDayView(fd) };
+  }
+
+  /** Store the checklist, giving the starter reward (once) when the last step is done. */
+  private saveFirstDay(fd: FirstDay, now: number): FirstDay {
+    if (needsReward(fd)) {
+      const owned = this.sql.exec<{ item: string }>('SELECT item FROM inventory').toArray();
+      const item = rewardFor(owned.map((r) => r.item));
+      if (item) this.sql.exec('INSERT OR IGNORE INTO inventory (item, got_at, source) VALUES (?, ?, ?)', item, now, 'first-day');
+      fd = rewarded(fd, item, now);
+    }
+    this.set('firstDay', fd);
+    return fd;
+  }
+
+  private tickFirstDay(c: Creature, step: FirstDayStep, now: number) {
+    const cur = this.firstDayOf(c, now);
+    if (!cur) return;
+    const next = tickStep(cur.fd, step, now);
+    if (next !== cur.fd) this.saveFirstDay(next, now);
+  }
+
+  /** Close the first-day card: hides the list, or acknowledges the reward once it's done. */
+  async closeFirstDay(now = Date.now()): Promise<Result> {
+    const c = this.creature();
+    if (!c) return { ok: false, error: 'Hatch first.' };
+    const cur = this.firstDayOf(c, now);
+    if (cur) this.set('firstDay', closeFirstDay(cur.fd, now));
+    return { ok: true };
   }
 
   async hatch(salt: string, now = Date.now()): Promise<Result> {
@@ -345,6 +418,7 @@ export class PlayerDO extends DurableObject<Env> {
       c.state = r.state;
       this.set('creature', c);
       this.sql.exec('INSERT OR REPLACE INTO care_log (action, at) VALUES (?, ?)', action, now);
+      if (action === 'feed') this.tickFirstDay(c, 'feed', now);
       const paid = [...this.wallet.levels(before, levelForXp(c.state.xp), now), this.wallet.care(c.state, now)];
       bits = paid.reduce((s, p) => s + (p?.delta ?? 0), 0);
       await this.mirror();
@@ -367,6 +441,7 @@ export class PlayerDO extends DurableObject<Env> {
     }
     c.items = { ...c.items, [slot]: item };
     this.set('creature', c);
+    if (item !== null) this.tickFirstDay(c, 'dress', now);
     await this.publish(now);
     return { ok: true };
   }
@@ -379,6 +454,7 @@ export class PlayerDO extends DurableObject<Env> {
     c.script = null;
     c.strategy = null;
     this.set('creature', c);
+    this.tickFirstDay(c, 'plan', now);
     await this.publish(now);
     return { ok: true, tactics: c.tactics, strategy: this.strategyView(c) };
   }
@@ -396,6 +472,7 @@ export class PlayerDO extends DurableObject<Env> {
     }
     c.script = src;
     this.set('creature', c);
+    this.tickFirstDay(c, 'plan', now);
     await this.publish(now);
     return { ok: true, strategy: this.strategyView(c) };
   }
@@ -460,7 +537,6 @@ export class PlayerDO extends DurableObject<Env> {
     return {
       pid: who.pid,
       handle: who.handle,
-      verified: !!who.verified,
       bot: false,
       seed: c.seed,
       stage: c.state.stage,
@@ -530,6 +606,7 @@ export class PlayerDO extends DurableObject<Env> {
       loot = result.loot;
     }
     this.set('creature', c);
+    if (outcome === 'win') this.tickFirstDay(c, 'win', now);
     this.sql.exec(
       'INSERT OR IGNORE INTO battles (id, at, side, opp_handle, opp_bot, outcome, xp, loot, rating_delta, replay, seen) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
       id,

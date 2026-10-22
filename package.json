@@ -11,12 +11,14 @@
     "format": "biome check --write .",
     "test": "bun test test/unit",
     "e2e": "bun test/e2e/run.ts",
+    "e2e:local": "bun test/e2e/local.ts",
     "art": "bun scripts/art.ts",
     "icons": "bun scripts/icons.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@cloudflare/workers-types": "^5.20261019.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "bun-types": "^1.4.3",
     "esbuild": "^0.28.2",
     "playwright-core": "^1.64.1",
@@ -24,5 +26,8 @@
     "wrangler": "^4.151.3"
   },
   "description": "A pixel pet and auto-battler for developers, on Cloudflare Workers",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.3"
+  }
 }

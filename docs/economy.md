@@ -148,7 +148,7 @@ SELECT held, AVG(won) AS win_rate, COUNT(*) AS n FROM battle_sides WHERE won IS 
 
 ## Operations
 
-- **Migrations.** `migrations/0004_shop.sql` adds `shop_items` (with `draw_key` and `look_key`), `shop_days`, `bits_events` and `battle_sides.body`. Player wallets create their own tables when first opened.
+- **Migrations.** `migrations/0005_shop.sql` (after `0004_oauth.sql`) adds `shop_items` (with `draw_key` and `look_key`), `shop_days`, `bits_events` and `battle_sides.body`. Player wallets create their own tables when first opened.
 - **Changing a classic's art.** Run `bun scripts/classic-looks.ts && npm run format` to refresh the precomputed looks; a unit test fails until you do.
 - **Changing the generator.** Bump `SHOP_GEN_VERSION` whenever it changes its output for a seed. Stored days and items are never regenerated, and each item's version is kept in `shop_items.gen_version`.
 - **Remaking a day locally:**

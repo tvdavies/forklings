@@ -53,7 +53,8 @@ const parseDay = (r: DayRow): ShopDay => ({
   ms: r.ms,
 });
 
-async function readDay(env: Env, day: string): Promise<ShopDay | null> {
+/** The stored day, or null if it hasn't been made yet. Never generates. */
+export async function readShopDay(env: Env, day: string): Promise<ShopDay | null> {
   const r = await env.DB.prepare('SELECT day, items, made, rejected, short, ms FROM shop_days WHERE day = ?').bind(day).first<DayRow>();
   return r ? parseDay(r) : null;
 }
@@ -82,7 +83,7 @@ const toExisting = (r: CatalogueRow): Existing => ({
  * flat as the catalogue grows (docs/economy.md, "Capacity and CPU").
  */
 export async function ensureShopDay(env: Env, day: string, now = Date.now()): Promise<ShopDay> {
-  const have = await readDay(env, day);
+  const have = await readShopDay(env, day);
   if (have) return have;
   const t0 = Date.now();
   const dayMs = Date.parse(`${day}T00:00:00Z`);
@@ -147,7 +148,7 @@ export async function ensureShopDay(env: Env, day: string, now = Date.now()): Pr
   await env.DB.batch(stmts);
   console.log('shop day', day, { made: items.length, rejected: rejected.length, short, back: back.length, ms });
   // Read back: if another request generated the same day at the same moment, its row won.
-  return (await readDay(env, day)) ?? { day, shelf, made: items.length, rejected: rejected.length, short, ms };
+  return (await readShopDay(env, day)) ?? { day, shelf, made: items.length, rejected: rejected.length, short, ms };
 }
 
 /** Generated items by id, with their shop data. */
@@ -183,7 +184,7 @@ export async function findOffer(env: Env, id: unknown, now = Date.now()): Promis
   const days = [today];
   if (now - Date.parse(`${today}T00:00:00Z`) < ROLLOVER_GRACE_MS) days.push(prevDay(today));
   for (const d of days) {
-    const sd = d === today ? await ensureShopDay(env, d, now) : await readDay(env, d);
+    const sd = d === today ? await ensureShopDay(env, d, now) : await readShopDay(env, d);
     const e = sd?.shelf.find((x) => x.id === id);
     if (!e) continue;
     const r = (await loadItems(env, [id])).get(id);

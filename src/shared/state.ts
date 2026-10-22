@@ -17,11 +17,15 @@ export const MAX_CATCHUP_MS = 30 * 24 * 3600 * 1000;
 const STEP_MS = 5 * 60 * 1000; // integrate in 5-minute steps
 const H = 3600 * 1000;
 
+// Below these, mood starts falling faster, so Home flags them.
+export const HUNGRY_BELOW = 25;
+export const TIRED_BELOW = 15;
+
 export const RATES = {
   fullnessPerHour: -5,
   moodPerHour: -3,
-  moodHungryPerHour: -8, // extra when fullness < 25
-  moodTiredPerHour: -3, // extra when energy < 15
+  moodHungryPerHour: -8, // extra when fullness < HUNGRY_BELOW
+  moodTiredPerHour: -3, // extra when energy < TIRED_BELOW
   energyPerHour: 8,
   energyNapPerHour: 60,
   xpPerHourContent: 4, // passive growth while fed (>30) and content (>40)
@@ -45,8 +49,8 @@ export function advance(s: PetState, now: number): PetState {
     const napping = t < out.napUntil;
     out.fullness = clamp(out.fullness + RATES.fullnessPerHour * h);
     let dm = RATES.moodPerHour;
-    if (out.fullness < 25) dm += RATES.moodHungryPerHour;
-    if (out.energy < 15) dm += RATES.moodTiredPerHour;
+    if (out.fullness < HUNGRY_BELOW) dm += RATES.moodHungryPerHour;
+    if (out.energy < TIRED_BELOW) dm += RATES.moodTiredPerHour;
     if (napping) dm = Math.max(dm, -1);
     out.mood = clamp(out.mood + dm * h);
     out.energy = clamp(out.energy + (napping ? RATES.energyNapPerHour : RATES.energyPerHour) * h);

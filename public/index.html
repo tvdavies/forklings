@@ -4,68 +4,93 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Forklings</title>
-<meta name="description" content="A pocket pet for developers. Raise it, dress it, coach it, and it battles on its own.">
+<meta name="description" content="A tiny pixel pet for developers. Hatch one, look after it, coach it, and let it battle while you code.">
 <meta name="theme-color" content="#271d3b">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" href="/icon-192.png" type="image/png">
-<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="/favicon-16.png" type="image/png" sizes="16x16">
+<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="/favicon-48.png" type="image/png" sizes="48x48">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:wght@400;600;700&family=Pixelify+Sans:wght@400..700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
+<style>
+/* Boot screen: painted from this HTML before app.js runs, then swapped for the app or a retry panel. */
+.boot{position:fixed;inset:0;z-index:15;display:grid;place-content:center;justify-items:center;padding:24px;text-align:center}
+.boot-egg{position:relative;width:120px;height:132px;margin-bottom:30px}
+.boot-egg::before{content:"";position:absolute;inset:-72px;background:radial-gradient(closest-side,rgba(255,242,220,.2),rgba(191,152,255,.08) 55%,transparent);transition:opacity .6s}
+.boot-egg::after{content:"";position:absolute;left:12px;right:12px;bottom:-14px;height:16px;background:radial-gradient(closest-side,rgba(18,12,28,.75),transparent)}
+.boot-egg svg{position:relative;z-index:1;display:block;width:100%;height:100%;shape-rendering:crispEdges;transition:filter .6s}
+.boot-egg g{visibility:hidden}
+.boot-egg .egg-still{visibility:visible}
+.boot[data-state=loading] .egg-still{animation:egg-still 1.8s steps(1,end) infinite}
+.boot[data-state=loading] .egg-right{animation:egg-right 1.8s steps(1,end) infinite}
+.boot[data-state=loading] .egg-left{animation:egg-left 1.8s steps(1,end) infinite}
+@keyframes egg-still{0%{visibility:visible}5%{visibility:hidden}10%{visibility:visible}15%{visibility:hidden}20%{visibility:visible}25%{visibility:hidden}30%{visibility:visible}35%{visibility:hidden}40%{visibility:visible}}
+@keyframes egg-right{0%{visibility:hidden}5%{visibility:visible}10%{visibility:hidden}25%{visibility:visible}30%{visibility:hidden}}
+@keyframes egg-left{0%{visibility:hidden}15%{visibility:visible}20%{visibility:hidden}35%{visibility:visible}40%{visibility:hidden}}
+.boot[data-state=error] .boot-egg::before{opacity:0}
+.boot[data-state=error] .boot-egg svg{filter:saturate(.45) brightness(.75)}
+.boot-line{font:600 22px/1.2 var(--f-pixel);color:var(--moon);margin:0 auto}
+.boot[data-state=error] .boot-line{font-size:30px}
+.boot-why{color:var(--haze);font-size:16px;max-width:32ch;margin:12px auto 0}
+.boot-why:empty{display:none}
+.boot .btn{margin-top:22px}
+.boot .btn[aria-disabled=true]{cursor:progress;filter:saturate(.5)}
+@media (prefers-reduced-motion:reduce){.boot-egg g{animation:none!important}.boot-egg::before,.boot-egg svg{transition:none}}
+</style>
 </head>
 <body>
 <header class="top" id="top" hidden>
-  <a class="brand" href="#home">Forklings</a>
-  <div class="who"><span id="whoHandle"></span> <span class="badge" id="whoBadge"></span>
-    <button class="link" id="logoutBtn" type="button">Log out</button></div>
+  <a class="brand" href="#home"><img src="/favicon-32.png" width="32" height="32" alt="">Forklings</a>
+  <div class="who"><span id="whoHandle"></span>
+    <button class="link" id="logoutBtn" type="button">Sign out</button></div>
 </header>
 
 <main id="app">
   <section class="view" id="v-login" hidden>
-    <div class="login">
-      <h1 class="wordmark">Forklings</h1>
-      <p class="tag">A pocket pet for developers. Raise it, dress it, coach it, and it battles on its own.</p>
-      <div class="panel login-box">
-        <button class="btn" id="ghBtn" type="button">Log in with GitHub</button>
-        <p class="small dim" id="ghNote">GitHub is used for your name only. Forklings never reads your repos or activity.</p>
-        <hr>
-        <form id="demoForm" autocomplete="off">
-          <label for="demoHandle" class="lbl">Demo login <span class="badge warn">unverified</span></label>
-          <p class="small dim">Pick any handle to play now. It isn't checked against GitHub, it's marked unverified on the leaderboard, and the pet lives in this browser's session.</p>
-          <div class="row">
-            <input class="handle" id="demoHandle" name="handle" placeholder="your-handle" maxlength="39" spellcheck="false" autocapitalize="off" required>
-            <button class="btn ghost" type="submit">Play demo</button>
-          </div>
-          <p class="err" id="demoErr" role="alert"></p>
-        </form>
+    <div class="signin">
+      <div class="signin-title">
+        <h1 class="wordmark">Forklings</h1>
+        <p class="pitch">A tiny pixel pet that battles while you code.</p>
+      </div>
+      <div class="stage signin-scene"><canvas id="meadowCanvas" role="img" aria-label="Three Forklings pottering about in a moonlit meadow"></canvas></div>
+      <div class="signin-cta">
+        <p class="signin-msg" id="signinMsg" role="alert" hidden></p>
+        <a class="btn gh" id="ghBtn" href="/auth/github"><svg viewBox="0 0 16 16" width="22" height="22" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Sign in with GitHub</a>
+        <p class="identity">GitHub only tells Forklings who you are: your username and when your account was made. Forklings never sees your code, repos or activity, and never posts anything for you.</p>
+        <p class="small dim">New here? Signing in gives you an egg to hatch.</p>
       </div>
     </div>
   </section>
 
   <section class="view" id="v-hatch" hidden>
     <div class="hatch-wrap">
-      <h2>An egg, just for you</h2>
-      <p class="dim">Its seed comes from your handle, this exact second and a secret salt, so nobody can predict a hatch.</p>
+      <div class="hatch-head"><h2 id="hatchTitle">An egg, just for you</h2><button class="info" id="hatchInfo" type="button" aria-expanded="false" aria-controls="hatchWhy" aria-label="How hatching works">i</button></div>
+      <p class="dim" id="hatchWhy" hidden>Its seed comes from your handle, this exact second and a secret salt, so nobody can predict a hatch.</p>
       <div class="stage ar43"><canvas id="hatchCanvas" aria-label="Your egg"></canvas><div class="card" id="hatchCard" aria-live="polite"></div></div>
-      <div class="actions"><button class="btn" id="hatchBtn" type="button">Hatch</button><button class="btn" id="meetBtn" type="button" hidden>Take it home</button></div>
+      <div class="actions"><button class="btn" id="hatchBtn" type="button">Hatch</button><button class="btn" id="meetBtn" type="button" hidden>Take it home</button><button class="btn ghost" id="copyPic" type="button" hidden>Copy picture</button></div>
+      <p class="toastline" id="hatchMsg" aria-live="polite"></p>
     </div>
   </section>
 
   <section class="view" id="v-home" hidden>
+    <section class="panel firstday" id="firstDay" aria-labelledby="fdTitle" hidden></section>
     <div class="home-grid">
       <div>
         <div class="stage ar169"><canvas id="homeCanvas" aria-label="Your Forkling at home"></canvas></div>
-        <div class="namebar"><span class="nm" id="petName"></span><span class="stars" id="petStars"></span><span class="dim small" id="petMeta"></span></div>
+        <div class="namebar"><span class="nm" id="petName"></span><span class="stars" id="petStars"></span><span class="chips" id="petChips"></span><span class="dim small" id="petMeta"></span></div>
         <div class="care" role="group" aria-label="Care">
           <button class="btn" data-care="feed" type="button">Feed</button>
           <button class="btn" data-care="play" type="button">Play</button>
           <button class="btn ghost" data-care="pat" type="button">Pat</button>
           <button class="btn ghost" data-care="nap" type="button" id="napBtn">Nap</button>
         </div>
-        <p class="toastline" id="careMsg" aria-live="polite"></p>
+        <p class="visually-hidden" id="careMsg" aria-live="polite"></p>
       </div>
       <div>
         <div class="panel stats" id="stats"></div>
@@ -142,11 +167,26 @@
     <div class="battle-grid">
       <div>
         <div class="stage ar169"><canvas id="battleCanvas" aria-label="Battle replay"></canvas></div>
+        <ol class="sr-only" id="battleLines" aria-label="Battle narration" aria-live="polite"></ol>
         <div class="row under">
           <button class="btn" id="fightBtn" type="button">Find a battle</button>
           <button class="btn ghost small-btn" id="speedBtn" type="button">Speed ×1</button>
           <button class="btn ghost small-btn" id="skipBtn" type="button">Skip</button>
         </div>
+        <div class="energy" id="energyLine"></div>
+        <section class="panel result" id="resultCard" aria-labelledby="resultTitle" hidden>
+          <div class="result-head">
+            <h3 class="result-title" id="resultTitle" tabindex="-1"></h3>
+            <span class="result-vs" id="resultVs"></span>
+            <button class="link result-close" id="resultClose" type="button">Close</button>
+          </div>
+          <p class="result-why" id="resultWhy"></p>
+          <dl class="result-rows" id="resultRows"></dl>
+          <div class="result-actions">
+            <a class="btn ghost" id="resultCoach" href="#coach">Adjust tactics</a>
+            <button class="btn" id="resultAgain" type="button">Fight again</button>
+          </div>
+        </section>
         <p class="toastline" id="battleMsg" aria-live="polite"></p>
       </div>
       <div>
@@ -159,28 +199,48 @@
 
   <section class="view" id="v-ranks" hidden>
     <h2>Leaderboard</h2>
-    <h3 class="sub">Ranked</h3>
-    <p class="dim small">GitHub players whose account is at least 30 days old, plus the house NPCs. Rating moves fully between players and only a little against house bots.</p>
+    <div class="you" id="rankMe" role="group" aria-label="Your place" hidden></div>
+    <details class="fold rules">
+      <summary class="lbl">How rating works</summary>
+      <p class="dim small">Ranked play is for GitHub accounts at least 30 days old, and for the house NPCs. Everyone starts at 1000. Ratings move fully in battles between ranked players and NPCs, and only a little against house bots. NPCs start at a set rating, so one can sit high before it has won anything.</p>
+      <p class="dim small">GitHub accounts less than 30 days old play in the practice bracket. They battle NPCs and house bots without a rating, so that list goes by wins.</p>
+    </details>
+    <h3 class="sub">Ranked players</h3>
     <ol class="ranks" id="ranks"></ol>
-    <h3 class="sub">Unranked</h3>
-    <p class="dim small">Demo players and newer GitHub accounts. They battle NPCs and house bots without a rating, so this list is by wins.</p>
+    <h3 class="sub">Practice</h3>
     <ol class="ranks" id="ranksU"></ol>
+    <details class="fold" id="npcFold" hidden>
+      <summary><h3 class="sub">House NPCs <span class="badge npc" id="npcCount"></span></h3></summary>
+      <p class="dim small">Run by the house so there's always someone to fight. They share the ranked ladder with players.</p>
+      <ol class="ranks npcs" id="ranksN"></ol>
+    </details>
   </section>
 
   <section class="view" id="v-api" hidden>
     <h2>Connect your tools</h2>
-    <p class="dim">Look after your Forkling from Claude Code, Pi, Codex or any MCP client. Create a personal token here; revoke it any time and it stops working at once.</p>
-    <div class="panel">
-      <form class="row" id="tokenForm"><input class="handle wide" id="tokenName" placeholder="Token name, e.g. laptop" maxlength="40"><button class="btn" type="submit">Create token</button></form>
-      <p class="tokenout" id="tokenOut" hidden></p>
-      <ul class="log" id="tokenList"></ul>
-    </div>
+    <p class="dim">Look after your Forkling from Claude Code, Codex, Pi or any MCP client. Add the server, sign in with GitHub in the browser when your tool asks, and choose what it may do. No token to paste.</p>
     <h3 class="sub">Claude Code</h3>
     <pre class="term">/plugin marketplace add tvdavies/forklings
 /plugin install forklings@forklings
-# paste your token when asked, then try /forklings:forkling</pre>
-    <h3 class="sub">Any MCP client</h3>
-    <p class="small dim">Streamable HTTP at <code>https://forklings.dev/mcp</code> with the header <code>Authorization: Bearer fk_…</code>.</p>
+/mcp    # pick forklings, then Authenticate</pre>
+    <h3 class="sub">Codex</h3>
+    <pre class="term">codex mcp add forklings --url https://forklings.dev/mcp
+codex mcp login forklings</pre>
+    <h3 class="sub">Pi</h3>
+    <pre class="term">pi mcp add forklings --url https://forklings.dev/mcp
+pi mcp login forklings</pre>
+    <p class="small dim">Any other MCP client: Streamable HTTP at <code>https://forklings.dev/mcp</code>, with OAuth discovery from the server's <code>401</code>.</p>
+    <h3 class="sub">Connected apps</h3>
+    <div class="panel">
+      <ul class="log" id="connList"></ul>
+    </div>
+    <h3 class="sub">Personal tokens</h3>
+    <p class="small dim">For scripts, CI and the status line, where nobody can sign in in a browser. A personal token can do everything a connected app can, so keep it secret. Send it as <code>Authorization: Bearer fk_…</code> to <code>/mcp</code> or the JSON API. Revoke it any time and it stops working at once.</p>
+    <div class="panel">
+      <form class="row" id="tokenForm"><input class="handle wide" id="tokenName" aria-label="Token name" placeholder="Token name, e.g. status line" maxlength="40"><button class="btn" type="submit">Create token</button></form>
+      <p class="tokenout" id="tokenOut" hidden></p>
+      <ul class="log" id="tokenList"></ul>
+    </div>
     <h3 class="sub">JSON API</h3>
     <pre class="term" id="apiDocs">GET  /api/me                 your Forkling, needs and wardrobe
 POST /api/care      {"action":"feed"|"play"|"pat"|"nap"}
@@ -193,7 +253,7 @@ GET  /api/status-line          two lines of text for a terminal status bar
 POST /api/battle               fight now, returns the outcome and replay seed
 GET  /api/battles              your battle log
 GET  /api/battles/:id          replay: seed + both snapshots
-GET  /api/leaderboard</pre>
+GET  /api/leaderboard          ranked players, NPCs, practice bracket and your place</pre>
   </section>
 </main>
 
@@ -206,11 +266,25 @@ GET  /api/leaderboard</pre>
   <a href="#api" data-tab="api">API</a>
 </nav>
 
-<div class="overlay" id="evoOverlay" hidden>
-  <div class="evo-box">
-    <div class="stage ar43"><canvas id="evoCanvas" aria-label="Evolution"></canvas></div>
-    <button class="btn" id="evoDone" type="button" hidden>Wonderful</button>
+<div class="overlay" id="evoOverlay" role="dialog" aria-modal="true" aria-label="Evolution" hidden>
+  <div class="evo-box" id="evoBox" tabindex="-1">
+    <div class="stage ar43"><canvas id="evoCanvas" aria-hidden="true"></canvas></div>
+    <p class="sr-only" id="evoMsg" aria-live="polite"></p>
+    <button class="btn" id="evoDone" type="button" hidden>Show me</button>
   </div>
+</div>
+
+<div class="boot" id="boot" data-state="loading">
+  <div class="boot-egg" aria-hidden="true"><svg viewBox="0 0 20 22" width="120" height="132">
+<g class="egg-still"><path fill="#1a1124" d="M7 0h6v1h-6zM6 1h1v1h-1zM13 1h1v1h-1zM5 2h1v1h-1zM14 2h1v1h-1zM4 3h1v1h-1zM15 3h1v1h-1zM3 4h1v1h-1zM16 4h1v1h-1zM2 5h1v1h-1zM17 5h1v1h-1zM2 6h1v1h-1zM17 6h1v1h-1zM1 7h1v1h-1zM18 7h1v1h-1zM1 8h1v1h-1zM18 8h1v1h-1zM1 9h1v1h-1zM18 9h1v1h-1zM1 10h1v1h-1zM18 10h1v1h-1zM1 11h1v1h-1zM18 11h1v1h-1zM0 12h1v1h-1zM19 12h1v1h-1zM1 13h1v1h-1zM18 13h1v1h-1zM1 14h1v1h-1zM18 14h1v1h-1zM1 15h1v1h-1zM18 15h1v1h-1zM1 16h1v1h-1zM18 16h1v1h-1zM2 17h1v1h-1zM17 17h1v1h-1zM3 18h1v1h-1zM16 18h1v1h-1zM4 19h1v1h-1zM15 19h1v1h-1zM5 20h2v1h-2zM13 20h2v1h-2zM7 21h6v1h-6z"/><path fill="#ffffff" d="M7 1h6v1h-6zM6 2h2v1h-2zM5 3h2v1h-2zM4 4h2v1h-2zM3 5h2v1h-2zM3 6h1v1h-1zM2 7h2v1h-2zM2 8h1v1h-1zM2 9h1v1h-1zM2 12h1v1h-1zM2 14h1v1h-1zM2 15h1v1h-1zM2 16h1v1h-1z"/><path fill="#f1f3ff" d="M8 2h6v1h-6zM7 3h8v1h-8zM6 4h9v1h-9zM5 5h11v1h-11zM4 6h12v1h-12zM4 7h12v1h-12zM3 8h13v1h-13zM3 9h13v1h-13zM4 10h2v1h-2zM8 10h2v1h-2zM12 10h2v1h-2zM16 10h1v1h-1zM4 11h2v1h-2zM8 11h2v1h-2zM12 11h2v1h-2zM3 12h1v1h-1zM6 12h2v1h-2zM10 12h2v1h-2zM14 12h2v1h-2zM2 13h2v1h-2zM6 13h2v1h-2zM10 13h2v1h-2zM14 13h2v1h-2zM3 14h13v1h-13zM3 15h12v1h-12zM3 16h11v1h-11zM3 17h10v1h-10zM5 18h6v1h-6z"/><path fill="#c1c6e0" d="M15 4h1v1h-1zM16 5h1v1h-1zM16 6h1v1h-1zM16 7h2v1h-2zM16 8h2v1h-2zM16 9h2v1h-2zM17 10h1v1h-1zM16 11h2v1h-2zM18 12h1v1h-1zM16 14h2v1h-2zM15 15h3v1h-3zM14 16h4v1h-4zM13 17h4v1h-4zM4 18h1v1h-1zM11 18h5v1h-5zM5 19h10v1h-10zM7 20h6v1h-6z"/><path fill="#bf98ff" d="M2 10h2v1h-2zM6 10h2v1h-2zM10 10h2v1h-2zM14 10h2v1h-2zM2 11h2v1h-2zM6 11h2v1h-2zM10 11h2v1h-2zM14 11h2v1h-2zM1 12h1v1h-1zM4 12h2v1h-2zM8 12h2v1h-2zM12 12h2v1h-2zM4 13h2v1h-2zM8 13h2v1h-2zM12 13h2v1h-2z"/><path fill="#8a5fd6" d="M16 12h2v1h-2zM16 13h2v1h-2z"/></g>
+<g class="egg-right"><path fill="#1a1124" d="M8 0h6v1h-6zM7 1h1v1h-1zM14 1h1v1h-1zM6 2h1v1h-1zM15 2h1v1h-1zM5 3h1v1h-1zM16 3h1v1h-1zM4 4h1v1h-1zM17 4h1v1h-1zM3 5h1v1h-1zM17 5h1v1h-1zM3 6h1v1h-1zM18 6h1v1h-1zM2 7h1v1h-1zM18 7h1v1h-1zM2 8h1v1h-1zM19 8h1v1h-1zM1 9h1v1h-1zM19 9h1v1h-1zM1 10h1v1h-1zM19 10h1v1h-1zM1 11h1v1h-1zM19 11h1v1h-1zM1 12h1v1h-1zM19 12h1v1h-1zM1 13h1v1h-1zM19 13h1v1h-1zM1 14h1v1h-1zM19 14h1v1h-1zM1 15h1v1h-1zM18 15h1v1h-1zM2 16h1v1h-1zM18 16h1v1h-1zM2 17h1v1h-1zM17 17h1v1h-1zM3 18h1v1h-1zM16 18h1v1h-1zM4 19h1v1h-1zM15 19h1v1h-1zM5 20h2v1h-2zM13 20h2v1h-2zM7 21h6v1h-6z"/><path fill="#ffffff" d="M8 1h6v1h-6zM7 2h2v1h-2zM6 3h2v1h-2zM5 4h2v1h-2zM4 5h2v1h-2zM4 6h1v1h-1zM3 7h2v1h-2zM3 8h1v1h-1zM2 9h2v1h-2zM2 12h1v1h-1zM2 13h1v1h-1zM2 14h1v1h-1zM2 15h1v1h-1zM3 17h1v1h-1z"/><path fill="#f1f3ff" d="M9 2h6v1h-6zM8 3h7v1h-7zM7 4h9v1h-9zM6 5h10v1h-10zM5 6h12v1h-12zM5 7h12v1h-12zM4 8h13v1h-13zM4 9h13v1h-13zM4 10h2v1h-2zM8 10h2v1h-2zM12 10h2v1h-2zM16 10h1v1h-1zM4 11h2v1h-2zM8 11h2v1h-2zM12 11h2v1h-2zM16 11h1v1h-1zM3 12h1v1h-1zM6 12h2v1h-2zM10 12h2v1h-2zM14 12h2v1h-2zM3 13h1v1h-1zM6 13h2v1h-2zM10 13h2v1h-2zM14 13h2v1h-2zM3 14h13v1h-13zM3 15h12v1h-12zM3 16h11v1h-11zM4 17h9v1h-9zM5 18h6v1h-6z"/><path fill="#c1c6e0" d="M15 3h1v1h-1zM16 4h1v1h-1zM16 5h1v1h-1zM17 6h1v1h-1zM17 7h1v1h-1zM17 8h2v1h-2zM17 9h2v1h-2zM17 10h1v1h-1zM17 11h1v1h-1zM18 12h1v1h-1zM18 13h1v1h-1zM16 14h3v1h-3zM15 15h3v1h-3zM14 16h4v1h-4zM13 17h4v1h-4zM4 18h1v1h-1zM11 18h5v1h-5zM5 19h10v1h-10zM7 20h6v1h-6z"/><path fill="#bf98ff" d="M2 10h2v1h-2zM6 10h2v1h-2zM10 10h2v1h-2zM14 10h2v1h-2zM2 11h2v1h-2zM6 11h2v1h-2zM10 11h2v1h-2zM14 11h2v1h-2zM4 12h2v1h-2zM8 12h2v1h-2zM12 12h2v1h-2zM16 12h1v1h-1zM4 13h2v1h-2zM8 13h2v1h-2zM12 13h2v1h-2z"/><path fill="#8a5fd6" d="M18 10h1v1h-1zM18 11h1v1h-1zM17 12h1v1h-1zM16 13h2v1h-2z"/></g>
+<g class="egg-left"><path fill="#1a1124" d="M6 0h6v1h-6zM5 1h1v1h-1zM12 1h1v1h-1zM4 2h1v1h-1zM13 2h1v1h-1zM3 3h1v1h-1zM14 3h1v1h-1zM2 4h1v1h-1zM15 4h1v1h-1zM2 5h1v1h-1zM16 5h1v1h-1zM1 6h1v1h-1zM16 6h1v1h-1zM1 7h1v1h-1zM17 7h1v1h-1zM0 8h1v1h-1zM17 8h1v1h-1zM0 9h1v1h-1zM18 9h1v1h-1zM0 10h1v1h-1zM18 10h1v1h-1zM0 11h1v1h-1zM18 11h1v1h-1zM0 12h1v1h-1zM18 12h1v1h-1zM0 13h1v1h-1zM18 13h1v1h-1zM0 14h1v1h-1zM18 14h1v1h-1zM1 15h1v1h-1zM18 15h1v1h-1zM1 16h1v1h-1zM17 16h1v1h-1zM2 17h1v1h-1zM17 17h1v1h-1zM3 18h1v1h-1zM16 18h1v1h-1zM4 19h1v1h-1zM15 19h1v1h-1zM5 20h2v1h-2zM13 20h2v1h-2zM7 21h6v1h-6z"/><path fill="#ffffff" d="M6 1h6v1h-6zM5 2h2v1h-2zM4 3h2v1h-2zM3 4h2v1h-2zM3 5h1v1h-1zM2 6h2v1h-2zM2 7h1v1h-1zM1 8h2v1h-2zM1 9h1v1h-1zM1 10h1v1h-1zM1 11h1v1h-1zM1 14h1v1h-1zM2 16h1v1h-1z"/><path fill="#f1f3ff" d="M7 2h6v1h-6zM6 3h8v1h-8zM5 4h9v1h-9zM4 5h11v1h-11zM4 6h11v1h-11zM3 7h13v1h-13zM3 8h13v1h-13zM2 9h14v1h-14zM4 10h2v1h-2zM8 10h2v1h-2zM12 10h2v1h-2zM4 11h2v1h-2zM8 11h2v1h-2zM12 11h2v1h-2zM2 12h2v1h-2zM6 12h2v1h-2zM10 12h2v1h-2zM14 12h2v1h-2zM2 13h2v1h-2zM6 13h2v1h-2zM10 13h2v1h-2zM14 13h2v1h-2zM2 14h13v1h-13zM2 15h13v1h-13zM3 16h11v1h-11zM3 17h10v1h-10zM5 18h6v1h-6z"/><path fill="#c1c6e0" d="M14 4h1v1h-1zM15 5h1v1h-1zM15 6h1v1h-1zM16 7h1v1h-1zM16 8h1v1h-1zM16 9h2v1h-2zM16 10h2v1h-2zM16 11h2v1h-2zM15 14h3v1h-3zM15 15h3v1h-3zM14 16h3v1h-3zM13 17h4v1h-4zM4 18h1v1h-1zM11 18h5v1h-5zM5 19h10v1h-10zM7 20h6v1h-6z"/><path fill="#bf98ff" d="M2 10h2v1h-2zM6 10h2v1h-2zM10 10h2v1h-2zM14 10h2v1h-2zM2 11h2v1h-2zM6 11h2v1h-2zM10 11h2v1h-2zM14 11h2v1h-2zM1 12h1v1h-1zM4 12h2v1h-2zM8 12h2v1h-2zM12 12h2v1h-2zM1 13h1v1h-1zM4 13h2v1h-2zM8 13h2v1h-2zM12 13h2v1h-2z"/><path fill="#8a5fd6" d="M16 12h2v1h-2zM16 13h2v1h-2z"/></g>
+  </svg></div>
+  <div role="status">
+    <p class="boot-line" id="bootLine">Waking your Forkling…</p>
+    <p class="boot-why" id="bootWhy"></p>
+  </div>
+  <button class="btn" id="bootRetry" type="button" hidden>Try again</button>
 </div>
 
 <script type="module" src="/app.js"></script>

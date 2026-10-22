@@ -3,13 +3,16 @@
   "name": "forklings",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
+  // Client ID Metadata Documents: the OAuth server fetches an MCP client's metadata from the
+  // URL it uses as its client_id, so outbound fetches must never reach private addresses.
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": true,
   "routes": [{ "pattern": "forklings.dev", "custom_domain": true }],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/auth/*", "/mcp"]
+    "run_worker_first": ["/api/*", "/auth/*", "/mcp", "/authorize", "/oauth/*", "/.well-known/*"]
   },
   "durable_objects": {
     "bindings": [
@@ -21,9 +24,17 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "forklings-db", "database_id": "16108f11-44aa-4c37-8743-619bfb0dc5b0", "migrations_dir": "migrations" }
   ],
-  "vars": { "PUBLIC_ORIGIN": "https://forklings.dev", "DEMO_LOGIN": "on", "NPCS": "on" },
+  "vars": { "PUBLIC_ORIGIN": "https://forklings.dev", "NPCS": "on" },
+  // Caps open OAuth client registration (POST /oauth/register) per client IP; see
+  // src/worker/ratelimit.ts. Free, and nothing to create: the binding is the whole setup.
+  // namespace_id must be unique in the Cloudflare account, or counters are shared.
+  "ratelimits": [{ "name": "REGISTER_LIMITER", "namespace_id": "3141", "simple": { "limit": 10, "period": 60 } }],
   // House NPCs: seeding, care and their battles run every 20 minutes.
   // The shop restocks at 00:05 UTC (SHOP_CRON in src/worker/index.ts).
   "triggers": { "crons": ["*/20 * * * *", "5 0 * * *"] },
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  // Local dev only: keep the request URL at http://localhost:8787 instead of the route's
+  // https://forklings.dev, so OAuth discovery points at the local server. Set PUBLIC_ORIGIN
+  // to match in .dev.vars (see the README).
+  "dev": { "port": 8787, "host": "localhost:8787", "upstream_protocol": "http" }
 }
