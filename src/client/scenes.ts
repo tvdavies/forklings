@@ -578,6 +578,7 @@ export function makeBattle(canvas: HTMLCanvasElement) {
     const gs = snaps.map((s) => {
       const g = { ...genome(s.seed) };
       g.items = s.items || {};
+      g.gear = s.gear;
       g.id = `${g.id}|${s.items ? Object.values(s.items).join('.') : ''}`;
       return g;
     });
@@ -1123,4 +1124,70 @@ export function makeEvo(canvas: HTMLCanvasElement, g: Genome, from: number, to: 
     if (T >= 3.6 && T < 3.8 && !RM) s.fadeAll('#fff6e6', (T - 3.6) / 0.2);
   };
   return evo;
+}
+
+/* ---------- fitting room ---------- */
+/**
+ * The shop's fitting room: the Forkling alone on a small stage, big enough to see what an
+ * item does to its silhouette. `set` changes the outfit; a new item gets a sparkle and a hop.
+ */
+export function makeFitting(canvas: HTMLCanvasElement) {
+  const W = 48,
+    H = 44;
+  const fit = new Stage(canvas, W, H, '#241a37');
+  const F = { g: null as Genome | null, stage: 0, react: -9, parts: new Particles(), key: '' };
+  const set = (g: Genome, stage: number, sparkle: boolean) => {
+    F.g = g;
+    F.stage = stage;
+    if (sparkle && g.id !== F.key) {
+      F.react = fit.t;
+      if (!RM)
+        for (let i = 0; i < 14; i++) {
+          const a = (i / 14) * Math.PI * 2;
+          F.parts.add({
+            x: 24 + Math.cos(a) * 6,
+            y: 20 + Math.sin(a) * 6,
+            vx: Math.cos(a) * 26,
+            vy: Math.sin(a) * 22 - 6,
+            drag: 3,
+            c: i % 3 ? '#eadcff' : '#ffd166',
+            life: 0.5 + (i % 4) * 0.08,
+            fade: 0.3,
+          });
+        }
+    }
+    F.key = g.id;
+  };
+  fit.draw = (_x, t, dt) => {
+    const g = F.g,
+      s = fit;
+    if (!g) return;
+    // a curtained booth: drapes, a spotlight and a round rug
+    s.rect(0, 0, W, H, '#241a37');
+    for (let xx = 0; xx < W; xx += 4) {
+      s.rect(xx, 0, 2, 33, '#2d2144');
+      s.rect(xx + 2, 0, 1, 33, '#33264c');
+    }
+    s.rect(0, 0, W, 2, '#4a3a6b');
+    s.rect(0, 33, W, 11, '#1c1530');
+    s.glow(24, 20, 24, '#fff2dc', 0.14);
+    for (let yy = 0; yy < 4; yy++) {
+      const w = 30 - Math.abs(1.5 - yy) * 4;
+      s.rect(24 - w / 2, 34 + yy, w, 1, yy === 0 ? '#bf98ff' : yy === 3 ? '#4e3192' : '#8a5fd6');
+    }
+    const rt = t - F.react;
+    let y = 0,
+      pose: Pose;
+    if (rt < 0.9) {
+      const ph = (rt / 0.45) % 1;
+      y = -Math.round(Math.sin(ph * Math.PI) * 3);
+      pose = { eyes: 'happy', mouth: 'open', sq: ph < 0.12 || ph > 0.88 ? 1 : -1 };
+    } else pose = idlePose(g, t);
+    pose.stage = F.stage;
+    pose.phase = Math.floor(t * 5) % 2;
+    s.img(spr(g, pose), 8, 5 + y);
+    F.parts.step(dt);
+    F.parts.draw(s);
+  };
+  return Object.assign(fit, { set });
 }

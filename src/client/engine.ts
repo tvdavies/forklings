@@ -1,6 +1,6 @@
 // Rendering engine: crisp pixel layer (whole-number scaled sprites) plus a free
 // layer for light, particles and type. Ported from the approved visual concept.
-import { compose, eggCols, itemIconCols, mapCols, type Pose, type Px, SLOTS } from '../shared/compose';
+import { compose, eggCols, type ItemDef, itemIconCols, mapCols, type Pose, type Px, SLOTS } from '../shared/compose';
 import { type Genome, INK } from '../shared/genome';
 
 export const RM = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -67,10 +67,11 @@ export function egg(g: Genome, lean: number, crack: number) {
   return c;
 }
 const iconCache = new Map<string, SpriteCanvas>();
-export function itemIcon(id: string) {
+/** An item's icon. Generated items need their def; their ids are unique, so the id is still the cache key. */
+export function itemIcon(id: string, def?: ItemDef) {
   let c = iconCache.get(id);
   if (!c) {
-    const r = itemIconCols(id);
+    const r = itemIconCols(id, def);
     c = toCanvas(r.cols, r.w, r.h);
     iconCache.set(id, c);
   }

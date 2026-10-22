@@ -1,6 +1,7 @@
 // Creature genome: every visible trait comes from the hatch seed.
 // Parts, palettes and pairing rules are ported from the approved visual concept;
 // only the seed source changed (hatch seed instead of the GitHub handle).
+import type { ItemDef } from './compose';
 import { mulberry, seedToInt } from './rng';
 
 export const INK = '#1a1124';
@@ -30,7 +31,7 @@ export const RNAME: Record<string, string> = {
   moss: 'Moss',
   gold: 'Gold',
 };
-const PAIRS = [
+export const PAIRS = [
   ['peach', 'mint'],
   ['lilac', 'butter'],
   ['sky', 'gum'],
@@ -133,6 +134,8 @@ export interface Genome {
   blinkOff: number;
   base: { hp: number; atk: number; def: number; spd: number };
   items: Record<string, string | null>;
+  /** Definitions of generated items the outfit uses, by id (classics come from ITEMS). */
+  gear?: Record<string, ItemDef>;
 }
 
 export function genome(seedHex: string): Genome {
@@ -202,7 +205,7 @@ export function genome(seedHex: string): Genome {
     g.base.hp += 1;
     g.base.atk += 1;
   }
-  g.items = { head: null, face: null, neck: null, held: null };
+  g.items = { head: null, face: null, neck: null, body: null, held: null };
   return g;
 }
 

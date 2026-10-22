@@ -3,6 +3,7 @@
 
 import { insufficientScope, type OAuthResourceContext } from '@cloudflare/workers-oauth-provider';
 import type { Snapshot } from '../shared/battle';
+import { nextUtcMidnight, utcDay } from '../shared/economy';
 import { genome, RARITY, STAGE_NAMES } from '../shared/genome';
 import { isRecord, prop } from '../shared/json';
 import { isOnboarding, LEVEL_RANGE, ONBOARDING_BATTLES, pickOpponent } from '../shared/matchmaking';
@@ -31,6 +32,7 @@ import {
 import type { PlayerDO, PlayerView } from './player';
 import { limitRegistration, REGISTER_PATH } from './ratelimit';
 import { effectiveScopes, isAuthorizeReturn } from './scopes';
+import { ensureShopDay, findOffer, offersFor, readShopDay } from './shop';
 
 export { BattleDO } from './battle';
 export { PlayerDO } from './player';
@@ -42,6 +44,8 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
   });
 const err = (status: number, message: string) => json({ error: message }, status);
 
+/** The nightly shop restock (must match wrangler.jsonc). Everything else on the cron is the NPC tick. */
+const SHOP_CRON = '5 0 * * *';
 const PAIR_COOLDOWN_MS = 6 * 3600 * 1000;
 // Not exported: workerd rejects entry-module exports that aren't handlers or classes.
 const RANKED_MIN_ACCOUNT_AGE_MS = 30 * 86400e3;
@@ -266,6 +270,22 @@ async function seedNpcs(env: Env, now: number) {
   }
 }
 
+/**
+ * Once a day, after the shelf is made, each NPC may buy and wear something new. Reads the
+ * day's shelf but never makes it: making items is the shop cron's job (or the first visit's),
+ * so an NPC tick never spends its time on the generator. No shelf yet means no shopping today.
+ */
+async function npcShopping(env: Env, npcs: NpcRow[], now: number) {
+  const day = await readShopDay(env, utcDay(now));
+  if (!day) return;
+  const offers = await offersFor(env, day);
+  for (const n of npcs) {
+    const stub = await player(env, { pid: n.pid, h: n.handle });
+    const got = await stub.npcShop(offers, now);
+    if (got) console.log('npc bought', n.handle, got);
+  }
+}
+
 /** Every tick: NPCs look after their Forklings like an attentive player would, and a few pick a fight. */
 async function npcTick(env: Env, now: number) {
   if (!npcsOn(env)) return;
@@ -285,6 +305,9 @@ async function npcTick(env: Env, now: number) {
     else if (s.mood < 70 && s.energy > 60) todo.push('play');
     for (const a of todo) await stub.care(a, now);
   }
+  // The first tick after 00:20 UTC goes shopping (the shelf is made at 00:05).
+  const sinceMidnight = now - Date.parse(`${utcDay(now)}T00:00:00Z`);
+  if (sinceMidnight >= 20 * 60e3 && sinceMidnight < 40 * 60e3) await npcShopping(env, npcs, now);
   const order = npcs
     .map((n) => ({ n, k: Math.random() }))
     .sort((x, y) => x.k - y.k)
@@ -293,6 +316,22 @@ async function npcTick(env: Env, now: number) {
     const r = await runBattle(env, { pid: n.pid, h: n.handle });
     if (!r.ok) console.log('npc battle skipped', n.handle, r.error);
   }
+}
+
+// ---------- shop ----------
+async function shop(env: Env, me: PlayerStub) {
+  const now = Date.now();
+  const day = await ensureShopDay(env, utcDay(now), now);
+  const [offers, v] = await Promise.all([offersFor(env, day), me.view(now)]);
+  return json({ day: day.day, restockAt: nextUtcMidnight(now), offers, ...v });
+}
+
+async function buy(env: Env, me: PlayerStub, body: JsonBody) {
+  const offer = await findOffer(env, body.item);
+  if (!offer) return json({ error: 'That item has left the shop. New stock arrives at midnight UTC.', code: 'gone' }, 409);
+  // Like every write endpoint, the player view comes back alongside the result, at the top level.
+  const { view, ...r } = await me.buy(offer, body.requestId);
+  return json({ ...view, ...r }, r.ok ? 200 : 409);
 }
 
 // ---------- tokens ----------
@@ -366,7 +405,7 @@ async function forklingCard(env: Env, who: Signed): Promise<ForklingCard | null>
   return {
     name: g.name,
     line: `@${who.handle}'s ${RARITY[g.rarity]} ${g.type}-type ${STAGE_NAMES[c.stage]}, level ${c.level}`,
-    portrait: await portrait(g, c.items, c.stage),
+    portrait: await portrait(g, c.items, c.stage, c.gear),
   };
 }
 
@@ -438,6 +477,10 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
       const r = await me.care(body.action);
       return json({ ...r, ...(await me.view()) }, r.ok ? 200 : 409);
     }
+    case p === '/api/shop' && m === 'GET':
+      return shop(env, me);
+    case p === '/api/shop/buy' && m === 'POST':
+      return buy(env, me, body);
     case p === '/api/equip' && m === 'POST': {
       const r = await me.equip(String(body.slot), body.item ?? null);
       return r.ok ? json({ ok: true, ...(await me.view()) }) : err(409, r.error);
@@ -519,6 +562,10 @@ export default {
     }
   },
   async scheduled(ctl: ScheduledController, env: Env, ctx: ExecutionContext) {
+    if (ctl.cron === SHOP_CRON) {
+      ctx.waitUntil(ensureShopDay(env, utcDay(ctl.scheduledTime), ctl.scheduledTime));
+      return;
+    }
     ctx.waitUntil(npcTick(env, ctl.scheduledTime));
     // Once an hour (the cron runs every 20 minutes): drop expired OAuth codes, tokens and grants.
     if (new Date(ctl.scheduledTime).getUTCMinutes() < 20) ctx.waitUntil(new D1KV(env.DB).purgeExpired());

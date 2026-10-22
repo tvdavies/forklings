@@ -13,10 +13,12 @@ mock.module('cloudflare:workers', () => ({
       this.env = env;
     }
   },
+  // scheduled.test.ts loads the Worker entry, whose OAuth library extends this.
+  WorkerEntrypoint: class {},
 }));
 const { PlayerDO } = await import('../../src/worker/player');
 
-/** Just enough of SqlStorage: exec(query, ...bindings).toArray(). */
+/** Just enough of SqlStorage: exec(query, ...bindings).toArray() and .rowsWritten (the wallet reads it). */
 function fakeSql(db: Database) {
   return {
     exec(q: string, ...b: (string | number | null)[]) {
@@ -28,22 +30,26 @@ function fakeSql(db: Database) {
           .filter((s) => s.trim()).length > 1
       ) {
         db.run(q);
-        return { toArray: () => [] };
+        return { toArray: () => [], rowsWritten: 0 };
       }
-      const rows = db.query(q).all(...b);
-      return { toArray: () => rows };
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(q)) {
+        const rows = db.query(q).all(...b);
+        return { toArray: () => rows, rowsWritten: 0 };
+      }
+      const r = db.query(q).run(...b);
+      return { toArray: () => [], rowsWritten: r.changes };
     },
   };
 }
-/** publish() writes to D1; the tests don't read it back. */
-const fakeD1 = { prepare: () => ({ bind: () => ({ run: async () => ({}) }) }) };
+/** publish() and the bits mirror write to D1; the tests don't read it back. */
+const fakeD1 = { prepare: () => ({ bind: () => ({ run: async () => ({}) }) }), batch: async () => [] };
 
 const T0 = Date.UTC(2026, 9, 21, 9, 0, 0);
 const replay = { a: { handle: 'me' }, b: { handle: 'npc-carl', bot: false }, seed: 'x' } as unknown as StoredReplay;
 
 function makePlayer() {
   const db = new Database(':memory:');
-  const ctx = { storage: { sql: fakeSql(db) } };
+  const ctx = { storage: { sql: fakeSql(db), transactionSync: <T>(fn: () => T) => db.transaction(fn)() } };
   // biome-ignore lint/suspicious/noExplicitAny: test doubles for the Workers runtime types
   const p = new PlayerDO(ctx as any, { DB: fakeD1 } as any);
   return { p, db };

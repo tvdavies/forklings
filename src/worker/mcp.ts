@@ -5,8 +5,8 @@
 // call. Each tool call goes to that player's Durable Object, the same path the web app
 // uses, so validation and game rules are identical.
 
-import { HELD_EFFECTS } from '../shared/battle';
-import { compose, ITEMS } from '../shared/compose';
+import { heldEffect } from '../shared/battle';
+import { compose, ITEMS, type ItemDef } from '../shared/compose';
 import { describe, type Genome, genome, RARITY, STAGE_NAMES } from '../shared/genome';
 import { isRecord, oneOf, prop } from '../shared/json';
 import { base64, centreSprite, encodePng, paintSprite } from '../shared/png';
@@ -157,8 +157,8 @@ function bar(v: number) {
 }
 
 /** A 256×256 PNG portrait of a Forkling, base64. Also shown on the OAuth consent page. */
-export async function portrait(g: Genome, items: Record<string, string | null>, stage: number) {
-  const { cols } = compose({ ...g, items }, { stage });
+export async function portrait(g: Genome, items: Record<string, string | null>, stage: number, gear: Record<string, ItemDef> = {}) {
+  const { cols } = compose({ ...g, items, gear }, { stage });
   return base64(await encodePng(256, 256, paintSprite(centreSprite(cols), 256, 7, '#271d3b')));
 }
 
@@ -175,14 +175,14 @@ async function callTool(name: string, args: unknown, d: McpDeps): Promise<ToolRe
       if (!c) return text('No Forkling yet. Hatch one at https://forklings.dev first.');
       const g = genome(c.seed);
       const s = c.state;
-      const held = c.items.held
-        ? `${ITEMS[c.items.held]?.name ?? c.items.held}${HELD_EFFECTS[c.items.held] ? ` (${HELD_EFFECTS[c.items.held].label})` : ''}`
-        : 'nothing';
+      const nameOf = (id: string) => ITEMS[id]?.name ?? c.gear[id]?.name ?? id;
+      const eff = heldEffect(c.items.held, c.gear);
+      const held = c.items.held ? `${nameOf(c.items.held)}${eff ? ` (${eff.label})` : ''}` : 'nothing';
       const worn =
-        (['head', 'face', 'neck'] as const)
+        (['head', 'face', 'neck', 'body'] as const)
           .map((k) => {
             const id = c.items[k];
-            return id && ITEMS[id]?.name;
+            return id && nameOf(id);
           })
           .filter(Boolean)
           .join(', ') || 'nothing';
@@ -194,12 +194,13 @@ async function callTool(name: string, args: unknown, d: McpDeps): Promise<ToolRe
         `Energy   ${bar(s.energy)} ${pct(s.energy)}%`,
         `XP ${Math.floor(s.xp)}${c.nextStageXp ? ` / ${c.nextStageXp} to evolve` : ' (fully evolved)'}${c.evolving ? '. Ready to evolve: open forklings.dev to watch it happen!' : ''}`,
         `Wearing ${worn}; holding ${held}.`,
+        ...(v.wallet ? [`Bits: ${v.wallet.bits}. The shop restocks at midnight UTC.`] : []),
         `Strategy: ${c.strategy.source === 'script' ? `custom script (${c.strategy.rules} rules)` : `tactics (${c.tactics.style}, aggression ${c.tactics.aggression}%)`}.`,
         `Looks: ${describe(g)}`,
       ];
       const content: ToolContent[] = [{ type: 'text', text: lines.join('\n') }];
       if (prop(args, 'portrait') !== false)
-        content.push({ type: 'image', data: await portrait(g, c.items, c.stage), mimeType: 'image/png' });
+        content.push({ type: 'image', data: await portrait(g, c.items, c.stage, c.gear), mimeType: 'image/png' });
       return {
         content,
         structuredContent: {
@@ -217,6 +218,7 @@ async function callTool(name: string, args: unknown, d: McpDeps): Promise<ToolRe
           readyToEvolve: !!c.evolving,
           napping: s.napUntil > Date.now(),
           items: c.items,
+          bits: v.wallet?.bits ?? 0,
           strategySource: c.strategy.source,
         },
       };
@@ -288,9 +290,10 @@ async function callTool(name: string, args: unknown, d: McpDeps): Promise<ToolRe
       const loot = o.loot
         ? ` Found ${ITEMS[o.loot]?.name ?? 'an item'}${o.lootNote === 'duplicate' ? ' (a duplicate: +10 XP instead)' : ''}.`
         : '';
+      const bits = o.bits ? ` +${o.bits} bits.` : '';
       return text(
-        `${result} in ${o.rounds} rounds against ${opp}. +${o.xp} XP.${loot} Practice battles never change your rating.\nWatch the replay: https://forklings.dev/#battle`,
-        { id: o.id, winner: o.winner, rounds: o.rounds, xp: o.xp, opponent: o.b.handle, loot: o.loot },
+        `${result} in ${o.rounds} rounds against ${opp}. +${o.xp} XP.${bits}${loot} Practice battles never change your rating.\nWatch the replay: https://forklings.dev/#battle`,
+        { id: o.id, winner: o.winner, rounds: o.rounds, xp: o.xp, bits: o.bits, opponent: o.b.handle, loot: o.loot },
       );
     }
   }
