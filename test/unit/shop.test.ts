@@ -7,7 +7,7 @@ import { CLASSIC_LOOKS, classicLooks } from '../../src/shared/classic-looks';
 import { compose, ITEMS, noItems, type Px } from '../../src/shared/compose';
 import { decodeLook, encodeLook, lookDistance, lookOf, MIN_ITEM_DISTANCE, nearDuplicate, RECENT_DAYS } from '../../src/shared/distinct';
 import { basePrice, CLASSICS, HELD_PCT, LEVEL_RANGE, utcDay } from '../../src/shared/economy';
-import { genome } from '../../src/shared/genome';
+import { genome, SHAPES } from '../../src/shared/genome';
 import { sha256Hex } from '../../src/shared/rng';
 import {
   BABY_SLOTS,
@@ -25,6 +25,7 @@ import {
   RESURFACED_PER_DAY,
   resurface,
   shopSeed,
+  showsOnBaby,
   storeDef,
 } from '../../src/shared/shopgen';
 
@@ -110,8 +111,30 @@ describe('generation', () => {
     }
   });
   test('every night has something a brand-new Forkling can buy and see', () => {
-    for (const r of run) expect(r.items.some((i) => i.level === 1 && BABY_SLOTS.has(i.def.slot))).toBe(true);
+    for (const r of run) expect(r.items.some((i) => i.level === 1 && showsOnBaby(i.def))).toBe(true);
   });
+  test('the level-1 item really shows on babies, even on nights whose first body item is a T-shirt', async () => {
+    // Babies are all head, so torso clothes (T-shirts, jumpers, dungarees) show on about one in
+    // five. A night's level-1 item used to be picked by slot alone, which made one of those the
+    // only thing a new Forkling could buy on about one night in twenty.
+    const babies = await Promise.all(Array.from({ length: 30 }, (_, i) => sha256Hex(`baby-${i}`)));
+    const shown = (it: GenItem) =>
+      babies.filter(
+        (s) =>
+          compose({ ...genome(s), items: { ...noItems(), [it.def.slot]: it.id }, gear: { [it.id]: it.def } }, { stage: 0 }).meta.items[
+            it.def.slot
+          ]?.visible,
+      ).length / babies.length;
+    let torsoNights = 0;
+    for (let d = 0; d < 300; d++) {
+      const day = dayN(d);
+      const { items } = generateDay(await shopSeed(day, `${SALT}-babies`), day, classics());
+      if (items.some((i) => i.def.slot === 'body' && !showsOnBaby(i.def))) torsoNights++;
+      const firsts = items.filter((i) => i.level === 1 && BABY_SLOTS.has(i.def.slot));
+      expect(firsts.some((i) => shown(i) >= 0.9)).toBe(true);
+    }
+    expect(torsoNights).toBeGreaterThan(20); // the case this guards against does come up
+  }, 60000);
   test('only paints with the game palette', () => {
     for (const it of all()) for (const c of lookOf(it.def).cols) if (c) expect(ITEM_PALETTE.has(c)).toBe(true);
   });
@@ -255,6 +278,35 @@ describe('fit on real creatures', () => {
       expect(shown / total).toBeGreaterThanOrEqual(0.97);
     }
   }, 30000);
+  test(`a week of items shows on every body plan (${SHAPES.join(', ')}) at every stage that wears it`, async () => {
+    // Six creatures of each shape. Torso clothes are a junior's and a prime's, like neck and held
+    // items; the rest show on babies too. Loaf juniors hide the most under the chin, so a shape
+    // passes when most of its creatures show the item; across all of them it's 9 in 10.
+    const byShape = new Map<string, string[]>(SHAPES.map((s) => [s, []]));
+    for (let i = 0; [...byShape.values()].some((v) => v.length < 6); i++) {
+      const s = await sha256Hex(`plan-${i}`);
+      const of = byShape.get(genome(s).shape)!;
+      if (of.length < 6) of.push(s);
+    }
+    for (const it of run.slice(0, 7).flatMap((r) => r.items)) {
+      let shown = 0,
+        total = 0;
+      for (const stage of showsOnBaby(it.def) ? [0, 1, 2] : [1, 2])
+        for (const [shape, seedsOf] of byShape) {
+          const here = seedsOf.filter(
+            (s) =>
+              compose({ ...genome(s), items: { ...noItems(), [it.def.slot]: it.id }, gear: { [it.id]: it.def } }, { stage }).meta.items[
+                it.def.slot
+              ]?.visible,
+          ).length;
+          if (here * 2 <= seedsOf.length)
+            throw new Error(`${it.def.name} shows on ${here} of ${seedsOf.length} ${shape} creatures at stage ${stage}`);
+          shown += here;
+          total += seedsOf.length;
+        }
+      expect(shown / total).toBeGreaterThanOrEqual(0.9);
+    }
+  }, 60000);
   test('an item never changes the creature more than a pixel away from itself', () => {
     // Right at the item's edge the outline is redrawn around the new silhouette, which can open a one-pixel seam.
     const near = (only: Px[], i: number) => {

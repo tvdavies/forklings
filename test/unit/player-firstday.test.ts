@@ -13,6 +13,8 @@ mock.module('cloudflare:workers', () => ({
       this.env = env;
     }
   },
+  // scheduled.test.ts loads the Worker entry, whose OAuth library extends this.
+  WorkerEntrypoint: class {},
 }));
 const { PlayerDO } = await import('../../src/worker/player');
 

@@ -58,7 +58,7 @@ The bands the tests enforce (`test/unit/economy.test.ts`):
 - A generated item's price is the base plus 0, 5 or 10, and its level is chosen within the range for its rarity.
 - Held items cost a quarter more because they're the only gear that affects battles.
 - Their edge is capped by the battle engine's existing `HELD_CAP_PCT` of 6%, which this work doesn't change. The task brief mentioned 8%, but the engine's 6% cap stays authoritative.
-- Every night has at least one level-1 head, face or body item, because those are the slots a stage-0 Forkling shows. If the night's roll has none, its least rare head, face or body item is dropped to level 1.
+- Every night has at least one level-1 item a stage-0 Forkling shows: a head or face item, or body wear that stands out from the silhouette (cape, wings, tutu, backpack or hoodie). Babies are all head, with no torso below the mouth, so T-shirts, jumpers, dungarees and vests show on only about one baby in five; like neck and held items, they're for juniors and up. If the night's roll has no such item at level 1, its least rare one is dropped to level 1. `showsOnBaby()` in `src/shared/shopgen.ts` is the rule, and a unit test renders each night's level-1 item on 30 babies.
 - A locked item says how far away it is: *Unlocks at level 7: 5 levels to go.*
 
 The classics keep their original look. They now have prices and levels: beanie, glasses and mug at level 1; scarf at 2; bow tie and party hat at 3; headphones at 5; keyboard at 6; cap and shades at 8; duck at 10; crown at 15. The three starters still come free with every egg, and battle loot can still drop any classic at any level.
@@ -159,3 +159,4 @@ SELECT held, AVG(won) AS win_rate, COUNT(*) AS n FROM battle_sides WHERE won IS 
 
   Never do this in production once anyone has bought from that day.
 - **Contact sheet.** `bun scripts/shop-sheet.ts [nights]` writes `docs/assets/shop-week.png` and prints the week as a table.
+- **Testing the crons.** `test/unit/scheduled.test.ts` fires both crons through the Worker's `scheduled()` against an in-memory D1 with every migration applied. To fire one against local D1 by hand, run `wrangler dev --test-scheduled` and request `/__scheduled?cron=5+0+*+*+*` (the shop) or `/__scheduled?cron=*/20+*+*+*+*` (NPCs).

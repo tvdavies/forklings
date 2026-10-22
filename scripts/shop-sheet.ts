@@ -10,7 +10,7 @@ import { CLASSICS, utcDay } from '../src/shared/economy';
 import { genome } from '../src/shared/genome';
 import { encodePng } from '../src/shared/png';
 import { sha256Hex } from '../src/shared/rng';
-import { BABY_SLOTS, type Existing, generateDay, ITEMS_PER_DAY, shopSeed } from '../src/shared/shopgen';
+import { type Existing, generateDay, ITEMS_PER_DAY, shopSeed, showsOnBaby } from '../src/shared/shopgen';
 
 const DAYS = Number(process.argv[2] ?? 7);
 const SALT = 'forklings-contact-sheet';
@@ -59,7 +59,7 @@ for (let d = 0; d < DAYS; d++) {
     rect(x0 + 12, y0 + 16, 72, 72, WELL);
     blit(ic.cols, ic.w, ic.h, x0 + 12 + Math.floor((72 - ic.w * s) / 2), y0 + 16 + Math.floor((72 - ic.h * s) / 2), s);
     // three wearers, at the stages that show this slot
-    const stages = BABY_SLOTS.has(it.def.slot) ? [0, 1, 2] : [1, 1, 2];
+    const stages = showsOnBaby(it.def) ? [0, 1, 2] : [1, 1, 2];
     stages.forEach((stage, j) => {
       const g = {
         ...genome(wearers[(k + j * 2) % wearers.length]),

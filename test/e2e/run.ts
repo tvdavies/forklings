@@ -228,10 +228,15 @@ const purse = async (pg: Page) => Number(await pg.textContent('#purseBits'));
 await step('shop: a level-locked item says how far away it is', async () => {
   await p.goto(`${BASE}/#shop`);
   await p.locator('#shelf .offer').first().waitFor();
-  // 50 to start, plus 10 for the daily care bonus the pat above earned
-  expect((await purse(p)) === 60, `expected 50 + 10 bits, has ${await purse(p)}`);
+  // 50 to start, 10 for the daily care bonus the pat above earned, and 5 + 2n for each level n
+  // reached since (feeding on the first-day list usually takes a new Forkling to level 2)
+  const level = await p.evaluate(async () => ((await (await fetch('/api/me')).json()) as { creature: { level: number } }).creature.level);
+  let expected = 60;
+  for (let n = 2; n <= level; n++) expected += 5 + 2 * n;
+  expect((await purse(p)) === expected, `expected ${expected} bits at level ${level}, has ${await purse(p)}`);
   await p.locator('#shelf .offer[aria-label^="Crown"]').click();
-  await p.waitForFunction(() => /Unlocks at level 15: 14 levels to go/.test(document.querySelector('#shopPick')?.textContent ?? ''));
+  const lock = `Unlocks at level 15: ${15 - level} levels to go`;
+  await p.waitForFunction((t) => (document.querySelector('#shopPick')?.textContent ?? '').includes(t), lock);
   expect(await p.locator('#shopPick [data-act=buy]').isDisabled(), 'buy is disabled while locked');
   await p.waitForTimeout(500);
   await shot(p, 'desktop-shop-locked');

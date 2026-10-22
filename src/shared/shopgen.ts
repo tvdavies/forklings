@@ -23,6 +23,15 @@ export const BACK_CANDIDATES = 3 * (RESURFACED_PER_DAY + ITEMS_PER_DAY);
 export const MAX_ATTEMPTS = 40;
 /** Slots a stage-0 Forkling shows: neck and held items appear from the first evolution. */
 export const BABY_SLOTS = new Set<Slot>(['head', 'face', 'body']);
+/**
+ * Clothes that recolour the torso below the mouth. A baby is all head, with no torso below its
+ * mouth, so these show on only about one baby in five; capes, wings, tutus, backpacks and
+ * hoodies stand out from the silhouette and show on every one.
+ */
+export const TORSO_STYLES = new Set(['tee', 'jumper', 'overalls', 'vest']);
+/** Whether a stage-0 Forkling shows the item: its slot is a baby's, and it isn't torso clothing. */
+export const showsOnBaby = (d: ItemDef): boolean =>
+  BABY_SLOTS.has(d.slot) && !(d.slot === 'body' && d.kind === 'wear' && TORSO_STYLES.has(d.p?.style ?? ''));
 
 export const CREAM = '#fff2dc';
 /** Every colour a generated item may use: the creature ramps, ink, cream, and white for glints. */
@@ -851,10 +860,11 @@ export function generateDay(seed: number, day: string, existing: Existing[], opt
     }
   });
   // Something new a brand-new Forkling can buy and see: the first head, face or body common opens at level 1.
-  // (Babies have no neck to wear things on and don't hold items, so those wouldn't show.)
-  // On a night without such a common, the least rare one opens at level 1 instead.
-  if (!items.some((i) => i.level <= 1 && BABY_SLOTS.has(i.def.slot))) {
-    const c = items.filter((i) => BABY_SLOTS.has(i.def.slot)).sort((a, b) => a.def.rarity - b.def.rarity)[0];
+  // (Babies have no neck to wear things on, don't hold items, and have no torso for a T-shirt,
+  // jumper or dungarees, so those wouldn't show.) On a night without such a common, the least
+  // rare one opens at level 1 instead.
+  if (!items.some((i) => i.level <= 1 && showsOnBaby(i.def))) {
+    const c = items.filter((i) => showsOnBaby(i.def)).sort((a, b) => a.def.rarity - b.def.rarity)[0];
     if (c) c.level = 1;
   }
   return { items, rejected, back: back.slice(0, RESURFACED_PER_DAY + ITEMS_PER_DAY - items.length) };
